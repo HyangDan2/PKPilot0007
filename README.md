@@ -61,4 +61,4 @@ app.js              markdown-it setup, autosave, export, frontmatter, GitHub RES
 js/vendor/          markdown-it 14.3.3, highlight.js 11.11.1, DOMPurify 3.2.6 (vendored, no CDN)
 ```
 
-Theme is the shared one: `/assets/hd2-theme.css` + `/assets/hd2-theme.js` (44px floating toggle).
+Theme is the shared one: `./assets/hd2-theme.css` + `./assets/hd2-theme.js` (44px floating toggle).
