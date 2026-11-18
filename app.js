@@ -10,11 +10,14 @@
     const GH_KEY = 'hd2_md_github_v1';
     const PAT_KEY = 'hd2_md_pat_v1';
     const DEFAULT_GH = {
-        repo: 'HyangDan2/HyangDan2.github.io',
+        repo: 'HyangDan2/diary',
         branch: 'main',
         path: 'diary-src/posts/',
         message: 'post: HD2Lab diary',
     };
+    /* HD2's Diary used to live in HyangDan2/HyangDan2.github.io; a stored target that still points
+       there would recreate `diary-src/` in the portal repo, so it is moved to the diary repo once. */
+    const LEGACY_GH_REPO = 'HyangDan2/HyangDan2.github.io';
     const CATEGORIES = ['devlog', 'architecture', 'troubleshooting', 'notes'];
     const MD_EXT = /\.(md|markdown|txt)$/i;
     const MAX_LOCAL_BYTES = 2 * 1024 * 1024;
@@ -22,7 +25,9 @@
     const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
     const IMAGE_EXTS = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' };
     const IMAGE_SRC_DIR = 'diary-src/assets/images/';
-    const IMAGE_PUBLIC_DIR = 'diary/assets/images/';
+    const IMAGE_PUBLIC_DIR = 'assets/images/';
+    /* The diary repo is served at /diary/, so the built copy above arrives on the site there. */
+    const IMAGE_URL_DIR = '/diary/assets/images/';
 
     const SAMPLE = [
         '# 마크다운으로 기록하기',
@@ -774,6 +779,7 @@
         const alt = String(file.name).replace(/\.[^.]+$/, '') || '이미지';
         const sourcePath = `${IMAGE_SRC_DIR}${filename}`;
         const publicPath = `${IMAGE_PUBLIC_DIR}${filename}`;
+        const imageUrl = `${IMAGE_URL_DIR}${filename}`;
         const button = el.btnUploadImage;
         state.uploading = true;
         button.disabled = true;
@@ -785,7 +791,7 @@
             const source = await putRepoFile(token, settings, sourcePath, content, `chore(diary): 이미지 원본 추가 — ${filename}`);
             sourceDone = true;
             const published = await putRepoFile(token, settings, publicPath, content, `chore(diary): 이미지 배포본 추가 — ${filename}`);
-            insertImageMarkdown(alt, `/${publicPath}`);
+            insertImageMarkdown(alt, imageUrl);
             const overwritten = Boolean(source.sha || published.sha);
             setStatus(
                 el.publishStatus,
@@ -795,7 +801,7 @@
             toast(`이미지를 올리고 본문에 삽입했습니다.${overwritten ? ' 같은 이름의 파일을 덮어썼습니다.' : ''}`, 'ok');
         } catch (error) {
             const message = sourceDone
-                ? `이미지 원본은 올렸지만 /diary/ 복사본을 올리지 못했습니다. 같은 파일로 다시 시도해 주세요. (${error.message})`
+                ? `이미지 원본은 올렸지만 <code>assets/images/</code> 배포본을 올리지 못했습니다. 같은 파일로 다시 시도해 주세요. (${error.message})`
                 : `이미지를 올리지 못했습니다. ${error.message}`;
             setStatus(el.publishStatus, escapeHtml(message), 'err');
             toast(message, 'err');
@@ -821,8 +827,17 @@
         } catch (error) {
             stored = {};
         }
+        const repo = stored.repo === LEGACY_GH_REPO ? DEFAULT_GH.repo : stored.repo || DEFAULT_GH.repo;
+        if (stored.repo === LEGACY_GH_REPO) {
+            try {
+                window.localStorage.setItem(
+                    GH_KEY,
+                    JSON.stringify({ repo, branch: stored.branch || DEFAULT_GH.branch, path: stored.path || DEFAULT_GH.path, message: stored.message || DEFAULT_GH.message })
+                );
+            } catch (error) { /* 저장 실패는 기본값으로 계속 진행 */ }
+        }
         return {
-            repo: stored.repo || DEFAULT_GH.repo,
+            repo,
             branch: stored.branch || DEFAULT_GH.branch,
             path: stored.path || DEFAULT_GH.path,
             message: stored.message || DEFAULT_GH.message,
@@ -1132,7 +1147,7 @@
             const action = sha ? '덮어썼습니다' : '새로 만들었습니다';
             setStatus(
                 el.publishStatus,
-                `커밋 완료 — <code>${path}</code>를 ${action}. <a href="${url}" target="_blank" rel="noopener">커밋 ${String((result.commit && result.commit.sha) || '').slice(0, 7)} 보기 ↗</a><br>Diary 화면에 나타나려면 <code>diary-src</code> 빌드 후 <code>/diary/</code> 산출물을 함께 커밋해야 합니다.`,
+                `커밋 완료 — <code>${path}</code>를 ${action}. <a href="${url}" target="_blank" rel="noopener">커밋 ${String((result.commit && result.commit.sha) || '').slice(0, 7)} 보기 ↗</a><br>Diary 화면에 나타나려면 <code>diary-src</code> 빌드 후 저장소 루트 산출물(<code>index.html</code> · <code>posts/</code> · <code>categories/</code> · <code>assets/</code>)을 함께 커밋해야 합니다.`,
                 'ok'
             );
             toast(`커밋 완료 · ${path}`, 'ok');
