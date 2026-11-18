@@ -151,7 +151,7 @@
                     <div class="load-row" id="loadRow">
                         <div class="load-head">
                             <span class="mono-note">기존 글 불러오기</span>
-                            <p class="load-target" id="loadTarget">HyangDan2/HyangDan2.github.io · main · diary-src/posts/</p>
+                            <p class="load-target" id="loadTarget">HyangDan2/diary · main · diary-src/posts/</p>
                         </div>
                         <div class="load-controls">
                             <label class="load-select-wrap">
@@ -166,7 +166,7 @@
                         <p class="load-status" id="loadStatus" role="status" aria-live="polite">공개 저장소는 토큰 없이도 목록을 불러올 수 있습니다. 목록에서 글을 고르면 바로 열립니다.</p>
                     </div>
 
-                    <p class="publish-lede">제목·카테고리·날짜·슬러그·태그·요약을 채우면 Diary 포스트 frontmatter가 만들어집니다. PAT를 저장해 두면 아래 버튼 한 번으로 <code>HyangDan2/HyangDan2.github.io</code>에 커밋됩니다. 툴바의 이미지 버튼으로 올린 사진은 <code>diary-src/assets/images/</code>와 <code>diary/assets/images/</code>에 함께 커밋됩니다.</p>
+                    <p class="publish-lede">제목·카테고리·날짜·슬러그·태그·요약을 채우면 Diary 포스트 frontmatter가 만들어집니다. PAT를 저장해 두면 아래 버튼 한 번으로 <code>HyangDan2/diary</code>에 커밋됩니다. 툴바의 이미지 버튼으로 올린 사진은 <code>diary-src/assets/images/</code>와 <code>assets/images/</code>에 함께 커밋됩니다.</p>
 
                     <div class="field-grid">
                         <label class="field field-wide">
@@ -215,9 +215,9 @@
                         <button type="button" class="button button-primary" id="btnCommit">GitHub에 바로 커밋</button>
                         <button type="button" class="button button-ghost" id="btnOpenSettings">GitHub 설정</button>
                         <button type="button" class="button button-ghost" id="btnDownloadPost">이 글 .md 저장</button>
-                        <a class="button button-ghost" id="ghNewFile" href="https://github.com/HyangDan2/HyangDan2.github.io/new/main/diary-src/posts" target="_blank" rel="noopener">GitHub 새 파일 ↗</a>
+                        <a class="button button-ghost" id="ghNewFile" href="https://github.com/HyangDan2/diary/new/main/diary-src/posts" target="_blank" rel="noopener">GitHub 새 파일 ↗</a>
                     </div>
-                    <p class="publish-status" id="publishStatus" role="status" aria-live="polite">PAT가 없으면 <strong>GitHub 설정</strong>에서 한 번만 등록하면 됩니다. 커밋 후 <code>/diary/</code> 빌드 산출물은 별도로 갱신해야 화면에 나타납니다.</p>
+                    <p class="publish-status" id="publishStatus" role="status" aria-live="polite">PAT가 없으면 <strong>GitHub 설정</strong>에서 한 번만 등록하면 됩니다. 커밋 후 <code>/diary/</code>에 나타나려면 저장소 루트 빌드 산출물(<code>index.html</code> · <code>posts/</code> · <code>categories/</code> · <code>assets/</code>)도 함께 갱신해야 합니다.</p>
                 </div>
             </details>
         </section>
@@ -233,7 +233,7 @@
             </div>
             <div>
                 <span class="mono-note">IMAGE</span>
-                <p>툴바의 이미지 버튼으로 PNG · JPEG · WebP · GIF를 올리면 저장소의 <code>diary-src/assets/images/</code>와 <code>diary/assets/images/</code>에 함께 커밋되고, 본문 커서 자리에 <code>![]()</code>가 삽입됩니다. 이미지를 올리려면 GitHub 토큰이 필요합니다.</p>
+                <p>툴바의 이미지 버튼으로 PNG · JPEG · WebP · GIF를 올리면 저장소의 <code>diary-src/assets/images/</code>와 <code>assets/images/</code>에 함께 커밋되고, 본문 커서 자리에 <code>![](/diary/assets/images/…)</code>가 삽입됩니다. 이미지를 올리려면 GitHub 토큰이 필요합니다.</p>
             </div>
             <div>
                 <span class="mono-note">SANITIZE</span>
@@ -262,7 +262,7 @@
             <div class="field-grid">
                 <label class="field field-wide">
                     <span class="field-label">저장소 <em>owner/repo</em></span>
-                    <input type="text" id="ghRepo" placeholder="HyangDan2/HyangDan2.github.io" autocomplete="off" spellcheck="false">
+                    <input type="text" id="ghRepo" placeholder="HyangDan2/diary" autocomplete="off" spellcheck="false">
                 </label>
                 <label class="field">
                     <span class="field-label">브랜치 <em>branch</em></span>
