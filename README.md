@@ -7,22 +7,24 @@ A single-page Markdown editor that runs entirely in the browser. No backend, no 
 ## What it does
 
 - **Toolbar** — H1–H3, bold, italic, strikethrough, inline code, fenced code, bullet/numbered list,
-  task list, quote, link, table (plus undo and `Ctrl/⌘ + B/I/K/1/2/3/S`).
+  task list, quote, link, table, image upload and undo (plus `Ctrl/⌘ + B/I/K/1/2/3/S`).
+  `Ctrl/⌘ + S` downloads the post as `.md` and `Ctrl/⌘ + O` opens a file. Tab indents by two
+  spaces, or shifts a whole selected block.
 - **Views** — edit / split / preview on desktop; on narrow screens the split view collapses to a
   single pane and the split tab is hidden.
 - **Preview** — markdown-it (GFM tables, strikethrough, linkify) + highlight.js + task-list checkboxes.
   Rendered HTML passes through DOMPurify before it touches the DOM.
 - **Autosave** — body, diary fields and view mode in `localStorage['hd2_md_editor_v1']`.
 - **Export** — `.md` download, copy Markdown, copy HTML, standalone HTML file download.
-- **Open a file** — `.md 열기` in the FILE bar (or `Ctrl/⌘ + O`) opens a `.md / .markdown / .txt` file;
-  dragging a file onto the page works too. UTF-8 is used first and EUC-KR is tried as a fallback. A YAML
-  frontmatter block (`--- … ---`) fills title / category / date / slug / tags / summary and only the body
-  goes to the editor; without frontmatter the whole file is the body. The FILE bar then shows the file
-  name and a `로컬 파일` badge.
+- **Open a file** — the *open .md* button in the FILE bar (or `Ctrl/⌘ + O`) opens a
+  `.md / .markdown / .txt` file; dragging a file onto the page works too. UTF-8 is used first and EUC-KR is
+  tried as a fallback. A YAML frontmatter block (`--- … ---`) fills title / category / date / slug / tags /
+  summary and only the body goes to the editor; without frontmatter the whole file is the body. The FILE bar
+  then shows the file name and a *local file* badge.
 - **Load a post from GitHub** — the top of the publish panel lists the repository's posts
   (`GET /repos/{owner}/{repo}/contents/{path}?ref={branch}`, `.md` only, newest first). Picking one loads it
-  (`GET` the file, Base64 → UTF-8) and keeps the original `path` + `sha`; the FILE bar shows `수정 중`.
-  `새 글로 전환` unbinds the loaded post and goes back to a new file, keeping the body.
+  (`GET` the file, Base64 → UTF-8) and keeps the original `path` + `sha`; the FILE bar shows an *editing*
+  badge. *Switch to a new post* unbinds the loaded post and goes back to a new file, keeping the body.
 - **Image upload** — the toolbar image button (next to link / table) takes PNG · JPEG · WebP · GIF (≤5MB) and
   commits the same bytes twice with the stored PAT: `diary-src/assets/images/<YYYY-MM-DD>-<name>.<ext>` (source)
   and `assets/images/<same name>` (the committed Eleventy output at the repository root, so
@@ -42,17 +44,18 @@ A single-page Markdown editor that runs entirely in the browser. No backend, no 
 
 ## Diary target
 
-The default GitHub target is **`HyangDan2/diary`** (`main`, prefix `diary-src/posts/`), the repository that
-serves <https://hyangdan2.github.io/diary/>. HD2's Diary used to live under `HyangDan2/HyangDan2.github.io`;
-a stored target that still names it is moved to `HyangDan2/diary` on the next load.
+The default GitHub target is **`HyangDan2/diary`** (`main`, prefix `diary-src/posts/`, commit message
+`post: HD2Lab diary`), the repository that serves <https://hyangdan2.github.io/diary/>. HD2's Diary used to live
+under `HyangDan2/HyangDan2.github.io`; a stored target that still names it is moved to `HyangDan2/diary` on the
+next load. The settings dialog holds repo / branch / path prefix / commit message too
+(`localStorage['hd2_md_github_v1']`).
 
 ## GitHub token
 
 The PAT is stored only in this browser (`localStorage['hd2_md_pat_v1']`) and is sent only to
 `api.github.com`. A fine-grained token scoped to the target repository with **Contents: Read & Write**
 is enough. Reading a post list or a file from a **public** repository needs no token at all
-(`Authorization` is only added when a PAT is stored). The settings dialog holds repo / branch / path prefix /
-commit message too (`localStorage['hd2_md_github_v1']`).
+(`Authorization` is only added when a PAT is stored).
 
 A commit to `diary-src/posts/` is not visible on `/diary/` by itself: the diary repository commits its
 Eleventy build output at the root (`index.html`, `posts/`, `categories/`, `assets/`), so `diary-src` has to be
@@ -64,6 +67,7 @@ rebuilt and that output re-committed (see `HyangDan2/diary` → `diary-src/READM
 index.html          the page (HD2Lab header, toolbar, panes, publish panel, settings dialog)
 style.css           Soft Iris / Navy & Lavender tokens + layout
 app.js              markdown-it setup, autosave, export, frontmatter, GitHub REST commit
+assets/             shared hd2-theme.css / hd2-theme.js (44px floating toggle)
 js/vendor/          markdown-it 14.3.3, highlight.js 11.11.1, DOMPurify 3.2.6 (vendored, no CDN)
 ```
 
