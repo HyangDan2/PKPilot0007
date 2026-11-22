@@ -621,7 +621,10 @@
         const tags = tagList();
         el.docTags.innerHTML = tags.map((tag) => `<span class="tag">#${escapeHtml(tag)}</span>`).join('');
         paintFrontmatterCard();
-        document.title = title === '제목 없음' ? APP_NAME : `${title} · ${APP_NAME}`;
+        /* the tab names the post once it is a real document (Diary fields or an opened file),
+           and stays the product name for the start-up sample */
+        const named = hasDiaryFields() || Boolean(state.loadedName);
+        document.title = named && title !== '제목 없음' ? `${title} · ${APP_NAME}` : APP_NAME;
     }
 
     function paintFrontmatterCard() {
