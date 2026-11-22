@@ -432,7 +432,8 @@ kbd { padding: 1px 6px; border: 1px solid var(--border); border-bottom-width: 2p
     .doc-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); grid-template-areas: "toc" "panes"; }
     .toc { display: none; border-right: none; border-bottom: 1px solid var(--border); }
     .toc.is-open { display: flex; }
-    .toc-nav { max-height: 34dvh; }
+    /* the drawer sizes to its list (up to 34dvh) instead of holding empty space */
+    .toc-nav { flex: 0 1 auto; max-height: 34dvh; }
     .toc-head { padding: 9px 14px 6px; }
     .toc-close { display: inline-flex; align-items: center; justify-content: center; }
     .toc-toggle { display: inline-flex; }
@@ -504,9 +505,16 @@ kbd { padding: 1px 6px; border: 1px solid var(--border); border-bottom-width: 2p
     .split-caret { width: 22px; }
     .tool { width: 28px; height: 28px; }
 }
-@media (max-height: 560px) and (min-width: 901px) {
+/* short viewports (phone turned sideways, small windows): keep the chrome thin */
+@media (max-height: 560px) {
     .io-bar, .toolbar, .doc-bar { padding-block: 4px; }
-    .icon-btn, .doc-actions .icon-btn, .tool { height: 30px; }
+    .icon-btn, .doc-actions .icon-btn { height: 30px; }
+    .tool { width: 30px; height: 30px; }
+    .tool > svg { width: 15px; height: 15px; }
+    .statusbar { padding-block: 3px; }
+    .view-tab { min-height: 26px; padding-block: 3px; }
+}
+@media (max-height: 560px) and (min-width: 901px) {
     .doc-bar { justify-content: flex-start; }
 }
 @media (prefers-reduced-motion: reduce) {
