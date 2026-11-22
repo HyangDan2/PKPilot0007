@@ -35,7 +35,13 @@ script in an IIFE; everything it exposes for tests and for the console hangs off
 | `buildToc()` / `paintPreview()` / `paintDocHead()` | — | Re-render the preview, its TOC, and the document head. |
 | `scrollToHeading(id, smooth)` | — | Scrolls the preview pane to a heading (switches to a mode that shows it). |
 | `setExportMenu(open)` | — | Opens/closes the export split menu. |
+| `githubSettings()` | settings object | Reads `hd2_md_github_v1`, merges the new fields over an older stored shape, migrates the legacy repo. |
+| `openSettings()` / `saveGithubSettings()` | — | Opens the ⚙ settings modal / validates `owner/repo` and writes the form back. |
+| `applyPreset(name)` / `restoreSettingsDefaults()` | — | Fills the form from `diary` \| `general`; restore puts the diary values back. |
+| `openPublish()` / `frontmatterEnabled()` / `applyPublishMode()` | — | Opens the publish dialog, reads the YAML switch, folds the diary fields when it is OFF. |
+| `paintCategoryOptions(list)` | — | Rebuilds the publish category select from the settings. |
 | `getState()` | `{ mode, headings, localImages }` | Small read-only snapshot. |
+| `getSettings()` | settings object | The current commit target (same shape as `githubSettings()`). |
 | `getLoaded()` | `{ kind, name, path, sha }` | What the editor is currently bound to. |
 
 ## 2. Storage keys
@@ -44,11 +50,14 @@ script in an IIFE; everything it exposes for tests and for the console hangs off
 | --- | --- | --- |
 | `hd2-theme` | shared `assets/hd2-theme.js` | `'light' \| 'dark'` |
 | `hd2_md_editor_v1` | autosave | `{ body, updatedAt, diary: { title, category, date, slug, tags, summary }, mode }` |
-| `hd2_md_github_v1` | commit target | `{ repo, branch, path, message }` (default `HyangDan2/diary` · `main` · `diary-src/posts/`) |
+| `hd2_md_github_v1` | commit target | `{ repo, branch, path, message, imageSrcDir, imagePublicDir, imageUrlDir, categories, useFrontmatter }` (default `HyangDan2/diary` · `main` · `diary-src/posts/`) |
 | `hd2_md_pat_v1` | GitHub PAT | fine-grained token, sent only to `api.github.com` |
 
 The draft is written 520ms after the last edit and once more on `beforeunload`. A stored commit target that still
-names `HyangDan2/HyangDan2.github.io` is moved to `HyangDan2/diary` on the next load.
+names `HyangDan2/HyangDan2.github.io` is moved to `HyangDan2/diary` on the next load. Newer fields
+(`imageSrcDir`, `imagePublicDir`, `imageUrlDir`, `categories`, `useFrontmatter`) merge over whatever is stored,
+so a target saved by an older build keeps working; the optional `imagePublicDir` may be an empty string and
+means one image commit only.
 
 ## 3. Shell contract
 
