@@ -11,26 +11,46 @@
     const DRAFT_KEY = 'hd2_md_editor_v1';
     const GH_KEY = 'hd2_md_github_v1';
     const PAT_KEY = 'hd2_md_pat_v1';
-    const DEFAULT_GH = {
+    /* One commit target any repository can use: the diary values are the defaults, and every path
+       the workspace touches — posts, images, categories, frontmatter — is read from here. */
+    const GH_DEFAULTS = {
         repo: 'HyangDan2/diary',
         branch: 'main',
         path: 'diary-src/posts/',
         message: 'post: HD2Lab diary',
+        imageSrcDir: 'diary-src/assets/images/',
+        imagePublicDir: 'assets/images/',
+        /* The diary repo is served at /diary/, so the built copy above arrives on the site there. */
+        imageUrlDir: '/diary/assets/images/',
+        categories: ['devlog', 'architecture', 'troubleshooting', 'notes'],
+        useFrontmatter: true,
     };
+    const GH_PRESETS = {
+        diary: GH_DEFAULTS,
+        general: {
+            repo: '',
+            branch: 'main',
+            path: 'docs/',
+            message: 'docs: update markdown',
+            imageSrcDir: 'assets/images/',
+            imagePublicDir: '',
+            imageUrlDir: './assets/images/',
+            categories: ['docs', 'notes', 'guide'],
+            useFrontmatter: false,
+        },
+    };
+    const DEFAULT_GH = GH_DEFAULTS;
+    /* kept in sync with the stored settings so the diary fields and the frontmatter follow it */
+    let CATEGORIES = GH_DEFAULTS.categories.slice();
     /* HD2's Diary used to live in HyangDan2/HyangDan2.github.io; a stored target that still points
        there would recreate `diary-src/` in the portal repo, so it is moved to the diary repo once. */
     const LEGACY_GH_REPO = 'HyangDan2/HyangDan2.github.io';
-    const CATEGORIES = ['devlog', 'architecture', 'troubleshooting', 'notes'];
     const MD_EXT = /\.(md|markdown|mdown|txt)$/i;
     const IMAGE_NAME_RE = /\.(png|jpe?g|gif|webp|avif|svg|bmp|ico|tiff?|heic|heif)$/i;
     const MAX_LOCAL_BYTES = 2 * 1024 * 1024;
     const CONTENTS_API = 'https://api.github.com/repos/';
     const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
     const IMAGE_EXTS = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' };
-    const IMAGE_SRC_DIR = 'diary-src/assets/images/';
-    const IMAGE_PUBLIC_DIR = 'assets/images/';
-    /* The diary repo is served at /diary/, so the built copy above arrives on the site there. */
-    const IMAGE_URL_DIR = '/diary/assets/images/';
 
     const SAMPLE = [
         '# 마크다운으로 기록하기',
@@ -102,6 +122,8 @@
         tabPreview: $('tab-preview'),
         helpDialog: $('helpDialog'),
         publishDialog: $('publishDialog'),
+        publishForm: $('publishForm'),
+        publishTarget: $('publishTarget'),
         loadDialog: $('loadDialog'),
         exportMenu: $('exportMenu'),
         btnExportMenu: $('btnExportMenu'),
@@ -115,11 +137,22 @@
         fmFrontmatter: $('fmFrontmatter'),
         publishStatus: $('publishStatus'),
         ghNewFile: $('ghNewFile'),
-        ghDialog: $('ghSettings'),
+        fmToggle: $('fmToggle'),
+        fmSlugLabel: $('fmSlugLabel'),
+        fmPreview: $('fmPreview'),
+        fmFrontmatterCol: $('fmFrontmatterCol'),
+        btnCopyPost: $('btnCopyPost'),
+        ghDialog: $('ghDialog'),
+        ghForm: $('ghForm'),
         ghRepo: $('ghRepo'),
         ghBranch: $('ghBranch'),
         ghPath: $('ghPath'),
         ghMessage: $('ghMessage'),
+        ghImageSrc: $('ghImageSrc'),
+        ghImageUrl: $('ghImageUrl'),
+        ghImagePublic: $('ghImagePublic'),
+        ghCategories: $('ghCategories'),
+        ghRepoHint: $('ghRepoHint'),
         ghToken: $('ghToken'),
         ghState: $('ghState'),
     };
@@ -275,7 +308,20 @@
     }
 
     function currentFileName() {
+        if (!frontmatterEnabled()) return plainFileName();
         return `${el.fmDate.value || todayKst()}-${currentSlug()}.md`;
+    }
+
+    /* frontmatter OFF: the author names the file, and may put it in a sub-folder (`docs/guide.md`) */
+    function plainFileName() {
+        const typed = String(el.fmSlug.value || '').trim().replace(/^\/+/, '');
+        const base = typed || slugify(bodyTitle()) || 'document';
+        return /(\.md|\.markdown)$/i.test(base) ? base : `${base}.md`;
+    }
+
+    function frontmatterEnabled() {
+        if (el.fmToggle) return Boolean(el.fmToggle.checked);
+        return githubSettings().useFrontmatter;
     }
 
     function hasDiaryFields() {
@@ -288,7 +334,7 @@
 
     function fullMarkdown() {
         const body = bodyText();
-        if (!hasDiaryFields()) return body ? `${body}\n` : '';
+        if (!frontmatterEnabled() || !hasDiaryFields()) return body ? `${body}\n` : '';
         return `${buildFrontmatter()}\n\n${body}\n`;
     }
 
@@ -445,7 +491,7 @@
         el.fmTags.value = '';
         el.fmSummary.value = '';
         el.fmDate.value = todayKst();
-        el.fmCategory.value = CATEGORIES[0];
+        setCategoryValue(CATEGORIES[0]);
     }
 
     function buildFrontmatter() {
@@ -924,8 +970,11 @@
 
     /* ---------------------------------------------------------------- diary preview */
     function paintDiary() {
+        const plain = !frontmatterEnabled();
         el.fmFilename.textContent = currentFileName();
-        el.fmFrontmatter.textContent = buildFrontmatter();
+        el.fmFrontmatter.textContent = plain
+            ? '— Frontmatter 없이 본문만 커밋합니다.'
+            : (hasDiaryFields() ? buildFrontmatter() : '— 제목을 채우면 frontmatter가 만들어집니다.');
         el.ghNewFile.href = newFileUrl();
         paintFileName();
     }
@@ -936,7 +985,8 @@
             el.docFileName.title = state.loadedPath ? `원본 경로: ${state.loadedPath}` : `원본 파일: ${state.loadedName}`;
             return;
         }
-        el.docFileName.textContent = hasDiaryFields() ? currentFileName() : 'untitled.md';
+        const named = hasDiaryFields() || !frontmatterEnabled();
+        el.docFileName.textContent = named ? currentFileName() : 'untitled.md';
         el.docFileName.removeAttribute('title');
     }
 
@@ -988,7 +1038,7 @@
             el.editor.value = stored.body;
             const diary = stored.diary || {};
             el.fmTitle.value = diary.title || '';
-            if (CATEGORIES.indexOf(diary.category) !== -1) el.fmCategory.value = diary.category;
+            if (diary.category) setCategoryValue(diary.category);
             el.fmDate.value = diary.date || todayKst();
             el.fmSlug.value = diary.slug || '';
             el.fmTags.value = diary.tags || '';
@@ -1098,6 +1148,25 @@
         return `${todayKst()}-${cleaned}.${ext}`;
     }
 
+    /* repository path join: `docs/` + `guide.md` → `docs/guide.md`, never doubled */
+    function joinPath(dir, name) {
+        const left = String(dir == null ? '' : dir).trim().replace(/^\/+/, '').replace(/\/+$/, '');
+        const right = String(name == null ? '' : name).trim().replace(/^\/+/, '');
+        if (!right) return left;
+        if (!left) return right;
+        if (right === left || right.indexOf(left + '/') === 0) return right;
+        return `${left}/${right}`;
+    }
+
+    /* URL join keeps a prefix as written — `./assets/images/` and `/diary/assets/images/` */
+    function joinUrl(prefix, name) {
+        const left = String(prefix == null ? '' : prefix).trim();
+        const right = String(name == null ? '' : name).trim().replace(/^\/+/, '');
+        if (!right) return left;
+        if (!left) return right;
+        return /\/$/.test(left) ? left + right : `${left}/${right}`;
+    }
+
     function fileToBase64(file) {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
@@ -1183,9 +1252,10 @@
         const settings = githubSettings();
         const filename = imageFileName(file.name, ext);
         const alt = String(file.name).replace(/\.[^.]+$/, '') || '이미지';
-        const sourcePath = `${IMAGE_SRC_DIR}${filename}`;
-        const publicPath = `${IMAGE_PUBLIC_DIR}${filename}`;
-        const imageUrl = `${IMAGE_URL_DIR}${filename}`;
+        const sourcePath = joinPath(settings.imageSrcDir, filename);
+        /* an empty extra copy path means one commit only */
+        const publicPath = String(settings.imagePublicDir || '').trim() ? joinPath(settings.imagePublicDir, filename) : '';
+        const imageUrl = joinUrl(settings.imageUrlDir, filename);
         const button = el.btnUploadImage;
         state.uploading = true;
         button.disabled = true;
@@ -1194,20 +1264,25 @@
         let sourceDone = false;
         try {
             const content = await fileToBase64(file);
-            const source = await putRepoFile(token, settings, sourcePath, content, `chore(diary): 이미지 원본 추가 — ${filename}`);
+            const source = await putRepoFile(token, settings, sourcePath, content, `chore(assets): 이미지 원본 추가 — ${filename}`);
             sourceDone = true;
-            const published = await putRepoFile(token, settings, publicPath, content, `chore(diary): 이미지 배포본 추가 — ${filename}`);
+            const published = publicPath
+                ? await putRepoFile(token, settings, publicPath, content, `chore(assets): 이미지 배포본 추가 — ${filename}`)
+                : null;
             insertImageMarkdown(alt, imageUrl);
-            const overwritten = Boolean(source.sha || published.sha);
+            const overwritten = Boolean(source.sha || (published && published.sha));
+            const places = publicPath
+                ? `<code>${escapeHtml(sourcePath)}</code>와 <code>${escapeHtml(publicPath)}</code>`
+                : `<code>${escapeHtml(sourcePath)}</code>`;
             setStatus(
                 el.publishStatus,
-                `이미지 <code>${escapeHtml(filename)}</code>을(를) <code>${escapeHtml(sourcePath)}</code>와 <code>${escapeHtml(publicPath)}</code>에 올리고 본문에 삽입했습니다.${overwritten ? ' 같은 이름의 파일이 있어 덮어썼습니다.' : ''}`,
+                `이미지 <code>${escapeHtml(filename)}</code>을(를) ${places}에 올리고 본문에 삽입했습니다.${overwritten ? ' 같은 이름의 파일이 있어 덮어썼습니다.' : ''}`,
                 'ok'
             );
             toast(`이미지를 올리고 본문에 삽입했습니다.${overwritten ? ' 같은 이름의 파일을 덮어썼습니다.' : ''}`, 'ok');
         } catch (error) {
             const message = sourceDone
-                ? `이미지 원본은 올렸지만 <code>assets/images/</code> 배포본을 올리지 못했습니다. 같은 파일로 다시 시도해 주세요. (${error.message})`
+                ? `이미지 원본은 올렸지만 <code>${escapeHtml(publicPath || '배포본 경로')}</code> 복제본을 올리지 못했습니다. 같은 파일로 다시 시도해 주세요. (${error.message})`
                 : `이미지를 올리지 못했습니다. ${error.message}`;
             setStatus(el.publishStatus, escapeHtml(message), 'err');
             toast(message, 'err');
@@ -1219,28 +1294,69 @@
     }
 
     /* ---------------------------------------------------------------- github settings */
-    function githubSettings() {
-        let stored = {};
+    function readGithubStore() {
+        let stored = null;
+        try { stored = JSON.parse(window.localStorage.getItem(GH_KEY) || '{}'); } catch (error) { stored = null; }
+        return stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
+    }
+
+    /* the new fields are merged over whatever is stored, so an older four-field target keeps working */
+    function writeGithubStore(patch) {
+        const next = Object.assign({}, readGithubStore(), patch);
         try {
-            stored = JSON.parse(window.localStorage.getItem(GH_KEY) || '{}') || {};
+            window.localStorage.setItem(GH_KEY, JSON.stringify(next));
+            return true;
         } catch (error) {
-            stored = {};
+            return false;
         }
-        const repo = stored.repo === LEGACY_GH_REPO ? DEFAULT_GH.repo : stored.repo || DEFAULT_GH.repo;
-        if (stored.repo === LEGACY_GH_REPO) {
-            try {
-                window.localStorage.setItem(
-                    GH_KEY,
-                    JSON.stringify({ repo, branch: stored.branch || DEFAULT_GH.branch, path: stored.path || DEFAULT_GH.path, message: stored.message || DEFAULT_GH.message })
-                );
-            } catch (error) { /* 저장 실패는 기본값으로 계속 진행 */ }
-        }
-        return {
-            repo,
-            branch: stored.branch || DEFAULT_GH.branch,
-            path: stored.path || DEFAULT_GH.path,
-            message: stored.message || DEFAULT_GH.message,
+    }
+
+    /* an empty string is a real choice for the optional paths (root, one copy, no URL prefix) */
+    function storedText(stored, key, fallback) {
+        return typeof stored[key] === 'string' ? stored[key] : fallback;
+    }
+
+    function parseCategoryList(value) {
+        const list = Array.isArray(value) ? value : String(value == null ? '' : value).split(',');
+        const out = [];
+        list.forEach((item) => {
+            const name = String(item == null ? '' : item).trim();
+            if (name && out.indexOf(name) === -1) out.push(name);
+        });
+        return out;
+    }
+
+    function githubSettings() {
+        const stored = readGithubStore();
+        const migrated = stored.repo === LEGACY_GH_REPO;
+        const typedRepo = typeof stored.repo === 'string' ? stored.repo.trim() : GH_DEFAULTS.repo;
+        const categories = parseCategoryList(stored.categories);
+        const settings = {
+            repo: (migrated ? GH_DEFAULTS.repo : typedRepo) || GH_DEFAULTS.repo,
+            branch: (typeof stored.branch === 'string' ? stored.branch.trim() : '') || GH_DEFAULTS.branch,
+            path: storedText(stored, 'path', GH_DEFAULTS.path),
+            message: storedText(stored, 'message', GH_DEFAULTS.message),
+            imageSrcDir: storedText(stored, 'imageSrcDir', GH_DEFAULTS.imageSrcDir),
+            imagePublicDir: storedText(stored, 'imagePublicDir', GH_DEFAULTS.imagePublicDir),
+            imageUrlDir: storedText(stored, 'imageUrlDir', GH_DEFAULTS.imageUrlDir),
+            categories: categories.length ? categories : GH_DEFAULTS.categories.slice(),
+            useFrontmatter: typeof stored.useFrontmatter === 'boolean' ? stored.useFrontmatter : GH_DEFAULTS.useFrontmatter,
         };
+        CATEGORIES = settings.categories.slice();
+        if (migrated) {
+            writeGithubStore({ repo: settings.repo, branch: settings.branch, path: settings.path, message: settings.message });
+        }
+        return settings;
+    }
+
+    function paintCategoryOptions(categories) {
+        const list = (categories && categories.length ? categories : GH_DEFAULTS.categories).slice();
+        const current = el.fmCategory.value;
+        el.fmCategory.innerHTML = '';
+        list.forEach((name) => el.fmCategory.append(new Option(name, name)));
+        /* a saved category outside the new list falls back to the first one */
+        if (current && list.indexOf(current) !== -1) el.fmCategory.value = current;
+        else el.fmCategory.value = list[0];
     }
 
     function getToken() {
@@ -1275,35 +1391,140 @@
 
     function openSettings(reason) {
         const settings = githubSettings();
-        el.ghRepo.value = settings.repo;
-        el.ghBranch.value = settings.branch;
-        el.ghPath.value = settings.path;
-        el.ghMessage.value = settings.message;
-        el.ghToken.value = getToken();
-        paintGhState();
+        paintGithubForm(settings);
         if (reason) toast(reason, 'err');
         showDialog(el.ghDialog);
         el.ghRepo.focus();
     }
 
+    function currentFormSettings() {
+        return {
+            repo: el.ghRepo.value.trim(),
+            branch: el.ghBranch.value.trim(),
+            path: el.ghPath.value.trim(),
+            message: el.ghMessage.value.trim(),
+            imageSrcDir: el.ghImageSrc.value.trim(),
+            imagePublicDir: el.ghImagePublic.value.trim(),
+            imageUrlDir: el.ghImageUrl.value.trim(),
+            categories: parseCategoryList(el.ghCategories.value),
+        };
+    }
+
+    function sameCategoryList(a, b) {
+        return a.length === b.length && a.every((item, index) => item === b[index]);
+    }
+
+    /* which preset the fields currently describe (empty when the target is custom) */
+    function detectPreset(form) {
+        const diary = GH_PRESETS.diary;
+        if (form.repo === diary.repo && form.path === diary.path && form.message === diary.message &&
+            form.imageSrcDir === diary.imageSrcDir && form.imagePublicDir === diary.imagePublicDir &&
+            form.imageUrlDir === diary.imageUrlDir && sameCategoryList(form.categories, diary.categories)) return 'diary';
+        const general = GH_PRESETS.general;
+        if (form.path === general.path && form.message === general.message &&
+            form.imageSrcDir === general.imageSrcDir && form.imagePublicDir === general.imagePublicDir &&
+            form.imageUrlDir === general.imageUrlDir && sameCategoryList(form.categories, general.categories)) return 'general';
+        return '';
+    }
+
+    function paintPresetChips() {
+        const active = detectPreset(currentFormSettings());
+        document.querySelectorAll('[data-preset]').forEach((chip) => {
+            const on = chip.dataset.preset === active;
+            chip.classList.toggle('is-active', on);
+            chip.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+    }
+
+    function paintRepoHint() {
+        if (!el.ghRepoHint) return;
+        el.ghRepoHint.hidden = /^[^\s/]+\/[^\s/]+$/.test(el.ghRepo.value.trim());
+    }
+
+    function paintGithubForm(settings) {
+        el.ghRepo.value = settings.repo;
+        el.ghBranch.value = settings.branch;
+        el.ghPath.value = settings.path;
+        el.ghMessage.value = settings.message;
+        el.ghImageSrc.value = settings.imageSrcDir;
+        el.ghImagePublic.value = settings.imagePublicDir;
+        el.ghImageUrl.value = settings.imageUrlDir;
+        el.ghCategories.value = settings.categories.join(', ');
+        el.ghToken.value = getToken();
+        paintPresetChips();
+        paintRepoHint();
+        paintGhState();
+    }
+
+    function fillFromPreset(preset) {
+        el.ghBranch.value = preset.branch;
+        el.ghPath.value = preset.path;
+        el.ghMessage.value = preset.message;
+        el.ghImageSrc.value = preset.imageSrcDir;
+        el.ghImagePublic.value = preset.imagePublicDir;
+        el.ghImageUrl.value = preset.imageUrlDir;
+        el.ghCategories.value = preset.categories.join(', ');
+        if (el.fmToggle) el.fmToggle.checked = preset.useFrontmatter;
+    }
+
+    /* the general preset keeps the repository as typed, so switching presets never loses it */
+    function applyPreset(name) {
+        const preset = GH_PRESETS[name];
+        if (!preset) return;
+        if (name !== 'general') el.ghRepo.value = preset.repo;
+        fillFromPreset(preset);
+        paintPresetChips();
+        paintRepoHint();
+        toast(name === 'diary'
+            ? 'HD2Lab Diary 기본값을 채웠습니다. 저장을 누르면 적용됩니다.'
+            : '일반 저장소 기본값을 채웠습니다. 저장소(owner/repo)를 확인하고 저장해 주세요.', 'ok');
+    }
+
+    function restoreSettingsDefaults() {
+        el.ghRepo.value = GH_PRESETS.diary.repo;
+        fillFromPreset(GH_PRESETS.diary);
+        paintPresetChips();
+        paintRepoHint();
+        toast('기본값으로 되돌렸습니다. 저장을 누르면 적용됩니다.', 'ok');
+    }
+
     function saveGithubSettings() {
-        const repo = el.ghRepo.value.trim() || DEFAULT_GH.repo;
-        const branch = el.ghBranch.value.trim() || DEFAULT_GH.branch;
-        const path = el.ghPath.value.trim() || DEFAULT_GH.path;
-        const message = el.ghMessage.value.trim() || DEFAULT_GH.message;
-        try {
-            window.localStorage.setItem(GH_KEY, JSON.stringify({ repo, branch, path, message }));
-            const token = el.ghToken.value.trim();
-            if (token) window.localStorage.setItem(PAT_KEY, token);
-        } catch (error) {
+        const form = currentFormSettings();
+        if (!/^[^\s/]+\/[^\s/]+$/.test(form.repo)) {
+            toast('저장소를 owner/repo 형식으로 입력해 주세요.', 'err');
+            el.ghRepo.focus();
+            return;
+        }
+        const categories = form.categories.length ? form.categories : GH_DEFAULTS.categories.slice();
+        const saved = writeGithubStore({
+            repo: form.repo,
+            branch: form.branch || GH_DEFAULTS.branch,
+            path: form.path,
+            message: form.message,
+            imageSrcDir: form.imageSrcDir,
+            imagePublicDir: form.imagePublicDir,
+            imageUrlDir: form.imageUrlDir,
+            categories,
+            useFrontmatter: el.fmToggle ? Boolean(el.fmToggle.checked) : GH_DEFAULTS.useFrontmatter,
+        });
+        if (!saved) {
             toast('설정을 저장하지 못했습니다. 브라우저 저장 공간을 확인해 주세요.', 'err');
             return;
         }
+        const token = el.ghToken.value.trim();
+        if (token) {
+            try { window.localStorage.setItem(PAT_KEY, token); } catch (error) { /* storage full */ }
+        }
+        const settings = githubSettings();
+        paintCategoryOptions(settings.categories);
         paintGhState();
+        paintPresetChips();
+        paintPublishTarget(settings);
+        applyPublishMode();
         el.ghNewFile.href = newFileUrl();
-        toast('GitHub 설정을 저장했습니다.', 'ok');
+        toast('GitHub 저장소 설정을 저장했습니다.', 'ok');
         if (el.ghDialog.open) el.ghDialog.close();
-        setStatus(el.publishStatus, `커밋 대상 <strong>${repo}</strong> · <code>${branch}</code> · <code>${path}</code>. 이제 <strong>GitHub에 바로 커밋</strong>을 누르면 됩니다.`, 'ok');
+        setStatus(el.publishStatus, `커밋 대상 <strong>${escapeHtml(settings.repo)}</strong> · <code>${escapeHtml(settings.branch)}</code> · <code>${escapeHtml(settings.path || '루트')}</code>. 이제 <strong>저장소에 커밋</strong>을 누르면 됩니다.`, 'ok');
     }
 
     function forgetToken() {
@@ -1311,6 +1532,47 @@
         el.ghToken.value = '';
         paintGhState();
         toast('저장된 토큰을 지웠습니다.');
+    }
+
+    /* ---------------------------------------------------------------- publish target */
+    function publishTargetLabel(settings) {
+        const prefix = String(settings.path || '').trim().replace(/^\/+|\/+$/g, '');
+        return `대상: ${settings.repo} · ${settings.branch} · ${prefix || '루트'}`;
+    }
+
+    function paintPublishTarget(settings) {
+        if (!el.publishTarget) return;
+        el.publishTarget.textContent = publishTargetLabel(settings || githubSettings());
+    }
+
+    /* frontmatter ON: the diary fields build a YAML block; OFF: only the file name, body as written */
+    function applyPublishMode() {
+        const on = frontmatterEnabled();
+        if (el.publishForm) el.publishForm.classList.toggle('is-plain', !on);
+        if (el.fmFrontmatterCol) el.fmFrontmatterCol.hidden = !on;
+        if (el.fmPreview) el.fmPreview.classList.toggle('is-single', !on);
+        if (el.fmSlugLabel) el.fmSlugLabel.textContent = on ? '파일명 / 슬러그' : '파일명 / 경로';
+        if (el.fmSlug) el.fmSlug.placeholder = on ? 'markdown-editor-viewer' : 'docs/guide.md';
+        paintDiary();
+        paintDocHead();
+    }
+
+    function openPublish() {
+        const settings = githubSettings();
+        paintCategoryOptions(settings.categories);
+        paintPublishTarget(settings);
+        if (el.fmToggle) el.fmToggle.checked = settings.useFrontmatter;
+        applyPublishMode();
+        showDialog(el.publishDialog);
+        el.fmTitle.focus();
+        el.fmTitle.select();
+    }
+
+    function onFrontmatterToggle() {
+        const on = Boolean(el.fmToggle.checked);
+        writeGithubStore({ useFrontmatter: on });
+        applyPublishMode();
+        announce(on ? 'YAML Frontmatter를 포함합니다.' : 'Frontmatter 없이 본문만 커밋합니다.');
     }
 
     /* ---------------------------------------------------------------- load from GitHub */
@@ -1418,7 +1680,7 @@
             }
             const name = (meta && meta.name) || target.split('/').pop();
             openMarkdownText(text, { kind: 'github', name, path: (meta && meta.path) || target, sha: (meta && meta.sha) || '' });
-            setStatus(el.loadStatus, `<code>${escapeHtml((meta && meta.path) || target)}</code> 글을 열었습니다. 수정한 뒤 <strong>GitHub에 바로 커밋</strong>을 누르면 같은 경로로 덮어씁니다.`, 'ok');
+            setStatus(el.loadStatus, `<code>${escapeHtml((meta && meta.path) || target)}</code> 글을 열었습니다. 수정한 뒤 <strong>저장소에 커밋</strong>을 누르면 같은 경로로 덮어씁니다.`, 'ok');
             toast(`${name} 글을 불러왔습니다.`, 'ok');
             announce(`${name} 글을 불러왔습니다.`);
             if (el.loadDialog.open) el.loadDialog.close();
@@ -1490,8 +1752,8 @@
             setStatus(el.publishStatus, '본문이 비어 있습니다. 내용을 먼저 써 주세요.', 'err');
             return;
         }
-        if (!el.fmTitle.value.trim()) {
-            setStatus(el.publishStatus, 'Diary 제목이 비어 있습니다. <strong>제목</strong>을 채워야 frontmatter가 완성됩니다.', 'err');
+        if (frontmatterEnabled() && !el.fmTitle.value.trim()) {
+            setStatus(el.publishStatus, 'YAML frontmatter의 <strong>제목</strong>이 비어 있습니다. 제목을 채우거나 <strong>YAML Frontmatter 포함</strong>을 꺼 주세요.', 'err');
             el.fmTitle.focus();
             return;
         }
@@ -1499,11 +1761,13 @@
         const settings = githubSettings();
         const editing = Boolean(state.loadedPath);
         const fileName = currentFileName();
-        const prefix = settings.path.trim().replace(/^\/+|\/+$/g, '');
-        const path = editing ? state.loadedPath : (prefix ? `${prefix}/${fileName}` : fileName);
+        const path = editing ? state.loadedPath : joinPath(settings.path, fileName);
         const content = fullMarkdown();
         const api = `https://api.github.com/repos/${settings.repo}/contents/${encodePath(path)}`;
         const headers = apiHeaders(token);
+        const commitName = path.split('/').pop() || fileName;
+        const messagePrefix = String(settings.message || '').trim();
+        const commitMessage = messagePrefix ? `${messagePrefix} ${commitName}` : `update ${commitName}`;
 
         if (editing && !window.confirm(`불러온 글 "${path}"을(를) 덮어씁니다. 계속할까요?`)) {
             setStatus(el.publishStatus, '덮어쓰기를 취소했습니다. 새 파일로 저장하려면 파일 바의 <strong>새 글로 전환</strong>을 눌러 주세요.');
@@ -1529,7 +1793,7 @@
             }
 
             const payload = {
-                message: settings.message || DEFAULT_GH.message,
+                message: commitMessage,
                 content: utf8ToBase64(content),
                 branch: settings.branch,
             };
@@ -1551,9 +1815,12 @@
             }
             const url = (result.commit && result.commit.html_url) || `https://github.com/${settings.repo}/commit/${result.commit && result.commit.sha}`;
             const action = sha ? '덮어썼습니다' : '새로 만들었습니다';
+            const buildNote = /(^|\/)diary-src\//.test(path)
+                ? '<br>Diary 화면에 나타나려면 <code>diary-src</code> 빌드 후 저장소 루트 산출물(<code>index.html</code> · <code>posts/</code> · <code>categories/</code> · <code>assets/</code>)을 함께 커밋해야 합니다.'
+                : '';
             setStatus(
                 el.publishStatus,
-                `커밋 완료 — <code>${path}</code>를 ${action}. <a href="${url}" target="_blank" rel="noopener">커밋 ${String((result.commit && result.commit.sha) || '').slice(0, 7)} 보기 ↗</a><br>Diary 화면에 나타나려면 <code>diary-src</code> 빌드 후 저장소 루트 산출물(<code>index.html</code> · <code>posts/</code> · <code>categories/</code> · <code>assets/</code>)을 함께 커밋해야 합니다.`,
+                `커밋 완료 — <code>${escapeHtml(path)}</code>를 ${action}. <a href="${url}" target="_blank" rel="noopener">커밋 ${String((result.commit && result.commit.sha) || '').slice(0, 7)} 보기 ↗</a>${buildNote}`,
                 'ok'
             );
             toast(`커밋 완료 · ${path}`, 'ok');
@@ -1564,7 +1831,7 @@
         } finally {
             state.committing = false;
             commitButton.disabled = false;
-            commitButton.textContent = 'GitHub에 바로 커밋';
+            commitButton.textContent = '저장소에 커밋';
         }
     }
 
@@ -1816,12 +2083,7 @@ ${bodyHtml}
             });
         });
         $('btnHelp').addEventListener('click', () => showDialog(el.helpDialog));
-        $('btnPublish').addEventListener('click', () => {
-            paintDiary();
-            showDialog(el.publishDialog);
-            el.fmTitle.focus();
-            el.fmTitle.select();
-        });
+        $('btnPublish').addEventListener('click', openPublish);
     }
 
     function wireExport() {
@@ -1890,7 +2152,7 @@ ${bodyHtml}
             el.fmTags.value = '';
             el.fmSummary.value = '';
             el.fmDate.value = todayKst();
-            el.fmCategory.value = CATEGORIES[0];
+            setCategoryValue(CATEGORIES[0]);
             el.saveState.textContent = '초기화됨 · 아직 저장된 초안 없음';
             el.saveState.classList.remove('is-ok');
             detachSilently();
@@ -1898,7 +2160,18 @@ ${bodyHtml}
             el.editor.focus();
         });
         $('btnOpenSettings').addEventListener('click', () => openSettings());
+        $('btnSettings').addEventListener('click', () => openSettings());
         $('btnSaveSettings').addEventListener('click', saveGithubSettings);
+        $('btnRestoreDefaults').addEventListener('click', restoreSettingsDefaults);
+        $('btnCancelSettings').addEventListener('click', () => { if (el.ghDialog.open) el.ghDialog.close(); });
+        document.querySelectorAll('[data-preset]').forEach((chip) => {
+            chip.addEventListener('click', () => applyPreset(chip.dataset.preset));
+        });
+        if (el.ghForm) {
+            el.ghForm.addEventListener('input', () => { paintPresetChips(); paintRepoHint(); });
+        }
+        if (el.fmToggle) el.fmToggle.addEventListener('change', onFrontmatterToggle);
+        if (el.btnCopyPost) el.btnCopyPost.addEventListener('click', () => copyText(fullMarkdown(), '마크다운을 복사했습니다.'));
         $('btnForgetToken').addEventListener('click', forgetToken);
         $('btnCommit').addEventListener('click', commitToGithub);
 
@@ -1938,6 +2211,12 @@ ${bodyHtml}
         paintDiary();
         paintDocHead();
         paintGhState();
+        const settings = githubSettings();
+        paintCategoryOptions(settings.categories);
+        paintGithubForm(settings);
+        paintPublishTarget(settings);
+        if (el.fmToggle) el.fmToggle.checked = settings.useFrontmatter;
+        applyPublishMode();
         setMode(state.savedMode || (mediaNarrow() ? 'edit' : 'split'));
         wireToolbar();
         wireViews();
@@ -1980,13 +2259,25 @@ ${bodyHtml}
         pickImage,
         uploadImage,
         imageFileName,
+        joinPath,
+        joinUrl,
         insertImageMarkdown,
         buildToc,
         paintPreview,
         paintDocHead,
         scrollToHeading,
         setExportMenu,
+        githubSettings,
+        openSettings,
+        saveGithubSettings,
+        applyPreset,
+        restoreSettingsDefaults,
+        openPublish,
+        frontmatterEnabled,
+        applyPublishMode,
+        paintCategoryOptions,
         getState: () => ({ mode: state.mode, headings: state.headings.length, localImages: state.localImages.size }),
+        getSettings: () => githubSettings(),
         getLoaded: () => ({ kind: state.loadedKind, name: state.loadedName, path: state.loadedPath, sha: state.loadedSha }),
     };
 })();

@@ -21,7 +21,8 @@ dialog, and the io-bar holds open / new post / load / publish / export. `@media 
 shell (`height: auto; overflow: visible`) so the whole document prints or saves as PDF with no chrome.
 
 The top bars carry icons only — every control is an SVG button with an `aria-label` and a `title`
-tooltip (17px SVG in a 34px button), so the chrome holds one row down to 320px.
+tooltip (17px SVG in a 34px button), so the chrome holds one row down to 320px. The `⚙` gear (between
+`?` and the theme switch) opens the GitHub repository settings.
 
 ## Writing
 
@@ -66,20 +67,23 @@ The io-bar's split button stores the body directly (**마크다운으로 저장*
 A document with Diary fields exports as `<date>-<slug>.md`; otherwise as `document.md`. Every conversion happens
 in the browser.
 
-## Diary publish
+## Publish
 
-The io-bar upload button opens **Diary로 발행하기**: title / category / date / slug / tags / summary →
-frontmatter + `<date>-<slug>.md` file name preview, with **GitHub에 바로 커밋**, **GitHub 설정**,
-**이 글 .md 저장** and **GitHub 새 파일** next to it.
+The io-bar upload button opens **저장소에 발행하기**: the top shows the live target badge
+(`대상: {repo} · {branch} · {path}`) straight from the settings, then a **YAML Frontmatter 포함**
+switch. With it ON the title / category / date / slug / tags / summary fields build frontmatter and a
+`<date>-<slug>.md` file name; with it OFF the diary fields fold away and only the file name (optionally
+`sub/dir/name.md`) stays — the body is committed as written. The category list follows the settings.
+Buttons: **⚙ 저장소 변경** (opens the settings modal), **이 글 .md 저장**, **GitHub 새 파일 ↗**, **복사** and
+**저장소에 커밋**.
 
 ## Image upload
 
-The toolbar image button takes PNG · JPEG · WebP · GIF (≤5MB) and commits the same bytes twice with the stored PAT:
-`diary-src/assets/images/<YYYY-MM-DD>-<name>.<ext>` (source) and `assets/images/<same name>` (the committed
-Eleventy output at the repository root, so `/diary/assets/images/…` serves it at once). The file name is lowered
-to ASCII letters, digits and hyphens; an existing file of that name is overwritten with its `sha`. Only after both
-commits succeed is `![<original name>](/diary/assets/images/<file name>)` inserted at the editor caret. Without a
-PAT the settings dialog opens and the upload is refused.
+The toolbar image button takes PNG · JPEG · WebP · GIF (≤5MB) and commits the bytes with the stored PAT to
+the configured paths: `imageSrcDir` (original), then `imagePublicDir` when it is non-empty (the extra copy —
+empty means one commit only). The body gets `![<original name>](<imageUrlDir>/<file name>)` at the caret.
+The file name is lowered to ASCII letters, digits and hyphens; an existing file of that name is overwritten
+with its `sha`. Without a PAT the settings dialog opens and the upload is refused.
 
 ## GitHub commit
 
@@ -90,15 +94,27 @@ One click from the publish dialog:
    response is stored for the next edit,
 2. otherwise `GET /repos/{owner}/{repo}/contents/{path}?ref={branch}` picks up an existing `sha`
    (new file = 404, overwrite = 200),
-3. `PUT /repos/{owner}/{repo}/contents/{path}` with UTF-8 Base64 content.
+3. `PUT /repos/{owner}/{repo}/contents/{path}` with UTF-8 Base64 content, message `{commit prefix} {file name}`.
 
-## Diary target
+## Commit target
 
 The default GitHub target is **`HyangDan2/diary`** (`main`, prefix `diary-src/posts/`, commit message
-`post: HD2Lab diary`), the repository that serves <https://hyangdan2.github.io/diary/>. HD2's Diary used to live
-under `HyangDan2/HyangDan2.github.io`; a stored target that still names it is moved to `HyangDan2/diary` on the
-next load. The settings dialog holds repo / branch / path prefix / commit message too
-(`localStorage['hd2_md_github_v1']`).
+`post: HD2Lab diary`), the repository that serves <https://hyangdan2.github.io/diary/>. The title bar's **⚙**
+gear opens **GitHub 저장소 설정**, which targets any repository:
+
+- **Presets** — `HD2Lab Diary (기본)` and `일반 GitHub 저장소` (`docs/`, `docs: update markdown`, one image
+  path, no frontmatter). The general preset keeps the repository field as typed; a custom target clears both
+  chips.
+- **Fields** — repository (`owner/repo`), branch, posts path, commit message prefix, the image path trio
+  (`imageSrcDir` / `imageUrlDir` / `imagePublicDir`), the category list (comma separated, feeds the publish
+  select) and the PAT. **기본값 복원** puts the diary values back, **취소** leaves the stored settings alone,
+  **저장** writes them.
+- **Frontmatter switch** — the publish dialog's toggle is stored too (`useFrontmatter`), so a plain docs repo
+  commits the body as written with no YAML.
+
+HD2's Diary used to live under `HyangDan2/HyangDan2.github.io`; a stored target that still names it is moved to
+`HyangDan2/diary` on the next load. Everything lives in `localStorage['hd2_md_github_v1']`, and the new fields
+merge over the older four-field shape, so a target stored before this change keeps working.
 
 ## GitHub token
 
@@ -109,7 +125,8 @@ is enough. Reading a post list or a file from a **public** repository needs no t
 
 A commit to `diary-src/posts/` is not visible on `/diary/` by itself: the diary repository commits its
 Eleventy build output at the root (`index.html`, `posts/`, `categories/`, `assets/`), so `diary-src` has to be
-rebuilt and that output re-committed (see `HyangDan2/diary` → `diary-src/README.md` → Deploy).
+rebuilt and that output re-committed (see `HyangDan2/diary` → `diary-src/README.md` → Deploy). Other targets
+have no build step — the commit is the whole publish.
 
 ## Files
 
