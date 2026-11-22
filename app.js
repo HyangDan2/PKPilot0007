@@ -1,11 +1,13 @@
 /* ==========================================================================
-   HD2Lab · PKPilot0007 — Markdown Editor
-   GFM preview · autosave · export · Diary frontmatter · GitHub commit
+   HD2Markdown Editor · PKPilot0007
+   Full-viewport app shell (52px app bar) · GFM preview · autosave · TOC ·
+   code copy · print · Diary frontmatter · image upload · GitHub commit
    ========================================================================== */
 (function () {
     'use strict';
 
     /* ---------------------------------------------------------------- constants */
+    const APP_NAME = 'HD2Markdown Editor';
     const DRAFT_KEY = 'hd2_md_editor_v1';
     const GH_KEY = 'hd2_md_github_v1';
     const PAT_KEY = 'hd2_md_pat_v1';
@@ -19,7 +21,8 @@
        there would recreate `diary-src/` in the portal repo, so it is moved to the diary repo once. */
     const LEGACY_GH_REPO = 'HyangDan2/HyangDan2.github.io';
     const CATEGORIES = ['devlog', 'architecture', 'troubleshooting', 'notes'];
-    const MD_EXT = /\.(md|markdown|txt)$/i;
+    const MD_EXT = /\.(md|markdown|mdown|txt)$/i;
+    const IMAGE_NAME_RE = /\.(png|jpe?g|gif|webp|avif|svg|bmp|ico|tiff?|heic|heif)$/i;
     const MAX_LOCAL_BYTES = 2 * 1024 * 1024;
     const CONTENTS_API = 'https://api.github.com/repos/';
     const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
@@ -57,9 +60,13 @@
     /* ---------------------------------------------------------------- dom */
     const $ = (id) => document.getElementById(id);
     const el = {
+        editorApp: $('editorApp'),
         editor: $('editor'),
         preview: $('preview'),
+        docPreview: $('docPreview'),
         panes: $('panes'),
+        paneEdit: $('pane-edit'),
+        panePreview: $('pane-preview'),
         docFileName: $('docFileName'),
         loadBadge: $('loadBadge'),
         btnOpenLocal: $('btnOpenLocal'),
@@ -77,7 +84,27 @@
         charCount: $('charCount'),
         saveState: $('saveState'),
         toast: $('toast'),
-        publishPanel: $('publishPanel'),
+        srStatus: $('srStatus'),
+        docTitle: $('docTitle'),
+        docEyebrow: $('docEyebrow'),
+        docSummary: $('docSummary'),
+        docTags: $('docTags'),
+        fmCard: $('fmCard'),
+        fmList: $('fmList'),
+        fmHint: $('fmHint'),
+        tocPanel: $('tocPanel'),
+        tocNav: $('tocNav'),
+        btnToc: $('btnToc'),
+        btnTocClose: $('btnTocClose'),
+        btnTop: $('btnTop'),
+        tabEdit: $('tab-edit'),
+        tabSplit: $('tab-split'),
+        tabPreview: $('tab-preview'),
+        helpDialog: $('helpDialog'),
+        publishDialog: $('publishDialog'),
+        loadDialog: $('loadDialog'),
+        exportMenu: $('exportMenu'),
+        btnExportMenu: $('btnExportMenu'),
         fmTitle: $('fmTitle'),
         fmCategory: $('fmCategory'),
         fmDate: $('fmDate'),
@@ -100,7 +127,7 @@
     const state = {
         mode: 'split',
         savedAt: 0,
-        saving: false,
+        savedMode: '',
         dirty: false,
         committing: false,
         loadedKind: '',
@@ -111,7 +138,16 @@
         loading: false,
         uploading: false,
         imageCaret: -1,
+        headings: [],
+        headingIds: [],
+        observer: null,
+        tocSignature: '',
+        localImages: new Map(),
     };
+
+    const mediaNarrow = () => window.matchMedia('(max-width: 900px)').matches;
+    const mediaTocDrawer = () => window.matchMedia('(max-width: 1200px)').matches;
+    const reduceMotion = () => !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 
     /* ---------------------------------------------------------------- markdown */
     const md = window.markdownit({
@@ -210,6 +246,17 @@
             .slice(0, 60);
     }
 
+    /* heading anchors inside the preview (same slug rule as the viewer) */
+    function slug(text) {
+        return String(text || '')
+            .toLowerCase()
+            .trim()
+            .replace(/[^\w가-힣\s-]/g, '')
+            .replace(/\s+/g, '-')
+            .replace(/-{2,}/g, '-')
+            .slice(0, 60) || 'section';
+    }
+
     function tagList() {
         return el.fmTags.value
             .split(',')
@@ -233,6 +280,73 @@
 
     function hasDiaryFields() {
         return Boolean(el.fmTitle.value.trim() || el.fmSlug.value.trim());
+    }
+
+    function bodyText() {
+        return el.editor.value.replace(/\s+$/, '');
+    }
+
+    function fullMarkdown() {
+        const body = bodyText();
+        if (!hasDiaryFields()) return body ? `${body}\n` : '';
+        return `${buildFrontmatter()}\n\n${body}\n`;
+    }
+
+    function escapeHtml(value) {
+        return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function download(name, content, type) {
+        const blob = new Blob([content], { type: type || 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = name;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+    }
+
+    async function copyText(text, okMessage) {
+        try {
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(text);
+            } else {
+                const helper = document.createElement('textarea');
+                helper.value = text;
+                helper.setAttribute('readonly', '');
+                helper.style.position = 'fixed';
+                helper.style.top = '-1000px';
+                document.body.appendChild(helper);
+                helper.select();
+                document.execCommand('copy');
+                helper.remove();
+            }
+            toast(okMessage || '복사했습니다.', 'ok');
+        } catch (error) {
+            toast('복사에 실패했습니다. 브라우저 권한을 확인해 주세요.', 'err');
+        }
+    }
+
+    let toastTimer = 0;
+    function toast(message, kind) {
+        el.toast.innerHTML = message;
+        el.toast.className = 'toast' + (kind === 'err' ? ' is-err' : kind === 'ok' ? ' is-ok' : kind === 'warn' ? ' is-warn' : '');
+        el.toast.hidden = false;
+        window.clearTimeout(toastTimer);
+        toastTimer = window.setTimeout(() => { el.toast.hidden = true; }, 4200);
+    }
+
+    function announce(message) {
+        if (el.srStatus) el.srStatus.textContent = message;
+    }
+
+    function setStatus(node, message, kind) {
+        node.innerHTML = message;
+        node.classList.toggle('is-ok', kind === 'ok');
+        node.classList.toggle('is-warn', kind === 'warn');
+        node.classList.toggle('is-err', kind === 'err');
     }
 
     /* ---------------------------------------------------------------- frontmatter parsing */
@@ -334,6 +448,375 @@
         el.fmCategory.value = CATEGORIES[0];
     }
 
+    function buildFrontmatter() {
+        const tags = tagList();
+        const lines = [
+            '---',
+            `title: ${yamlString(el.fmTitle.value.trim() || '제목 없음')}`,
+            `date: ${el.fmDate.value || todayKst()}`,
+            `category: ${yamlString(el.fmCategory.value || CATEGORIES[0])}`,
+        ];
+        const summary = el.fmSummary.value.trim();
+        if (summary) lines.push(`summary: ${yamlString(summary)}`);
+        lines.push(`tags: [${tags.map(yamlString).join(', ')}]`);
+        lines.push('layout: post');
+        lines.push('---');
+        return lines.join('\n');
+    }
+
+    /* ---------------------------------------------------------------- local image map */
+    function normalizePath(value) {
+        let out = String(value == null ? '' : value).trim();
+        if (!out) return '';
+        try { out = decodeURIComponent(out); } catch (error) { /* keep the raw string */ }
+        return out
+            .replace(/\\/g, '/')
+            .split('?')[0]
+            .split('#')[0]
+            .replace(/^\.\//, '')
+            .replace(/^\/+/, '')
+            .toLowerCase();
+    }
+
+    function isImageFile(file) {
+        if (!file) return false;
+        return /^image\//i.test(file.type || '') || IMAGE_NAME_RE.test(file.name || '');
+    }
+
+    /* local images are kept by file name and relative path so the preview can find them */
+    function rememberLocalImages(files) {
+        let added = 0;
+        files.forEach((file) => {
+            if (!isImageFile(file)) return;
+            const entry = {
+                file,
+                name: file.name,
+                relative: file.webkitRelativePath || '',
+                url: URL.createObjectURL(file),
+            };
+            const keys = [normalizePath(entry.relative), normalizePath(entry.name)].filter(Boolean);
+            if (!keys.length) return;
+            keys.forEach((key) => state.localImages.set(key, entry));
+            added += 1;
+        });
+        return added;
+    }
+
+    function findLocalImage(value) {
+        const key = normalizePath(value);
+        if (!key) return null;
+        const direct = state.localImages.get(key);
+        if (direct) return direct;
+        const base = key.split('/').pop();
+        const byBase = state.localImages.get(base);
+        if (byBase) return byBase;
+        let hit = null;
+        state.localImages.forEach((entry, mapKey) => {
+            if (hit) return;
+            if (mapKey.endsWith('/' + key) || key.endsWith('/' + mapKey)) hit = entry;
+        });
+        return hit;
+    }
+
+    function previewImageSrc(raw) {
+        const value = String(raw || '').trim();
+        if (!value) return '';
+        if (/^(?:data:|blob:)/i.test(value)) return value;
+        const local = findLocalImage(value);
+        if (local) return local.url;
+        if (/^https?:\/\//i.test(value) || /^\/\//.test(value)) return value;
+        return value;
+    }
+
+    function refreshImageSources() {
+        el.preview.querySelectorAll('img').forEach((image) => {
+            const raw = image.getAttribute('src');
+            if (!raw) return;
+            const next = previewImageSrc(raw);
+            if (next && next !== raw) {
+                image.setAttribute('data-origin-src', raw);
+                image.setAttribute('src', next);
+            }
+        });
+    }
+
+    function htmlExportSrc(raw) {
+        const value = String(raw || '');
+        if (!value) return '';
+        if (/^(?:data:|https?:)/i.test(value)) return value;
+        return value;
+    }
+
+    /* ---------------------------------------------------------------- preview */
+    function paintPreview() {
+        el.preview.innerHTML = renderMarkdown(el.editor.value);
+        wrapCodeBlocks();
+        refreshImageSources();
+        buildToc();
+        paintStats();
+        paintDocHead();
+        syncTopButton();
+        hintActiveFromHeadings();
+    }
+
+    /* the <pre> becomes a card with a language badge and a real copy button */
+    function wrapCodeBlocks() {
+        el.preview.querySelectorAll('pre.code-block').forEach((pre) => {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'md-code';
+            const head = document.createElement('div');
+            head.className = 'md-code-head';
+            const lang = pre.getAttribute('data-lang') || 'text';
+            head.innerHTML = `<span class="md-code-lang">${escapeHtml(lang)}</span><button type="button" class="md-copy">복사</button>`;
+            pre.removeAttribute('data-lang');
+            pre.parentNode.insertBefore(wrapper, pre);
+            wrapper.appendChild(head);
+            wrapper.appendChild(pre);
+
+            const button = head.querySelector('.md-copy');
+            button.addEventListener('click', async () => {
+                const code = pre.querySelector('code') || pre;
+                await copyText(code.textContent || '', '코드를 복사했습니다.');
+                button.textContent = '복사됨';
+                button.classList.add('is-done');
+                window.setTimeout(() => { button.textContent = '복사'; button.classList.remove('is-done'); }, 1800);
+            });
+        });
+    }
+
+    function paintStats() {
+        const text = el.editor.value;
+        /* count prose tokens, not markdown punctuation */
+        const prose = text
+            .replace(/^\s{0,3}(#{1,6}|[-*+]|\d+[.)])\s+/gm, '')
+            .replace(/\[[ xX]\]/g, ' ')
+            .replace(/[>*_`~|]/g, ' ')
+            .trim();
+        const words = prose ? prose.split(/\s+/).filter(Boolean).length : 0;
+        el.wordCount.textContent = words.toLocaleString('ko-KR');
+        el.charCount.textContent = text.length.toLocaleString('ko-KR');
+    }
+
+    function bodyTitle() {
+        const hit = /^#\s+(.+)$/m.exec(el.editor.value);
+        return hit ? hit[1].trim() : '';
+    }
+
+    /* the document head reads what the Diary fields say about this post */
+    function paintDocHead() {
+        const inBody = bodyTitle();
+        const title = el.fmTitle.value.trim() || inBody || '제목 없음';
+        el.docTitle.textContent = title;
+        /* a post whose frontmatter title is its first heading would print the same line twice */
+        el.docTitle.hidden = Boolean(inBody) && inBody === title;
+        const eyebrowParts = [];
+        if (hasDiaryFields()) {
+            if (el.fmCategory.value) eyebrowParts.push(String(el.fmCategory.value).toUpperCase());
+            if (el.fmDate.value) eyebrowParts.push(String(el.fmDate.value));
+        }
+        el.docEyebrow.textContent = eyebrowParts.length ? eyebrowParts.join(' · ') : 'MARKDOWN';
+        const summary = el.fmSummary.value.trim();
+        el.docSummary.textContent = summary;
+        el.docSummary.hidden = !summary;
+        const tags = tagList();
+        el.docTags.innerHTML = tags.map((tag) => `<span class="tag">#${escapeHtml(tag)}</span>`).join('');
+        paintFrontmatterCard();
+        document.title = title === '제목 없음' ? APP_NAME : `${title} · ${APP_NAME}`;
+    }
+
+    function paintFrontmatterCard() {
+        const rows = [];
+        if (hasDiaryFields()) {
+            rows.push(['title', el.fmTitle.value.trim() || '제목 없음']);
+            rows.push(['date', el.fmDate.value || todayKst()]);
+            rows.push(['category', el.fmCategory.value || CATEGORIES[0]]);
+            const summary = el.fmSummary.value.trim();
+            if (summary) rows.push(['summary', summary]);
+            rows.push(['tags', tagList().join(', ')]);
+            rows.push(['layout', 'post']);
+        }
+        if (!rows.length) {
+            el.fmCard.hidden = true;
+            el.fmList.innerHTML = '';
+            el.fmHint.textContent = '';
+            return;
+        }
+        el.fmList.innerHTML = rows
+            .map(([key, value]) => `<dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd>`)
+            .join('');
+        el.fmHint.textContent = `${rows.length} field${rows.length === 1 ? '' : 's'}`;
+        el.fmCard.hidden = false;
+    }
+
+    /* ---------------------------------------------------------------- toc */
+    const previewScroller = () => el.docPreview;
+
+    function setActiveToc(id) {
+        el.tocNav.querySelectorAll('.toc-link').forEach((link) => {
+            link.classList.toggle('is-active', link.dataset.target === id);
+        });
+    }
+
+    function closeTocDrawer() {
+        el.tocPanel.classList.remove('is-open');
+        el.btnToc.setAttribute('aria-expanded', 'false');
+        el.btnToc.setAttribute('aria-label', '목차 열기');
+    }
+
+    function revealTocLink(link) {
+        const nav = el.tocNav;
+        if (!nav || !link || !nav.scrollHeight) return;
+        const navBox = nav.getBoundingClientRect();
+        const linkBox = link.getBoundingClientRect();
+        if (linkBox.top < navBox.top + 8) nav.scrollTop -= navBox.top + 8 - linkBox.top;
+        else if (linkBox.bottom > navBox.bottom - 8) nav.scrollTop += linkBox.bottom - (navBox.bottom - 8);
+    }
+
+    /* the preview pane scrolls itself — the window never scrolls */
+    function scrollToHeading(id, smooth) {
+        const target = id && document.getElementById(id);
+        if (!target) return;
+        if (state.mode === 'edit') setMode(mediaNarrow() ? 'preview' : 'split');
+        const pane = previewScroller();
+        if (!pane) return;
+        const offset = 14;
+        const top = target.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop - offset;
+        const behavior = smooth === false || reduceMotion() ? 'auto' : 'smooth';
+        if (typeof pane.scrollTo === 'function') pane.scrollTo({ top: Math.max(0, top), behavior });
+        else pane.scrollTop = Math.max(0, top);
+        setActiveToc(id);
+    }
+
+    function hintActiveFromHeadings() {
+        const headings = state.headings || [];
+        const pane = previewScroller();
+        if (!headings.length || !pane || !pane.clientHeight) return;
+        const line = pane.getBoundingClientRect().top + 28;
+        let current = headings[0];
+        for (let i = 0; i < headings.length; i += 1) {
+            if (headings[i].getBoundingClientRect().top <= line) current = headings[i];
+            else break;
+        }
+        if (pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 2) current = headings[headings.length - 1];
+        if (!current || !current.id) return;
+        setActiveToc(current.id);
+        revealTocLink(el.tocNav.querySelector(`.toc-link[data-target="${current.id}"]`));
+    }
+
+    function observeHeadings(headings) {
+        if (state.observer) { state.observer.disconnect(); state.observer = null; }
+        if (!('IntersectionObserver' in window) || !headings.length) return;
+        state.observer = new IntersectionObserver(() => hintActiveFromHeadings(), {
+            root: previewScroller() || null,
+            rootMargin: '0px 0px -60% 0px',
+            threshold: 0,
+        });
+        headings.forEach((heading) => state.observer.observe(heading));
+    }
+
+    function buildToc() {
+        const headings = Array.from(el.preview.querySelectorAll('h1, h2, h3, h4'));
+        const signature = headings.map((heading) => `${heading.tagName}:${heading.textContent}`).join('|');
+
+        /* the preview is re-rendered on every keystroke: the same headings keep the same anchors,
+           only their DOM nodes are new, so the ids are put back instead of rebuilding the list */
+        if (signature === state.tocSignature && state.headingIds.length === headings.length) {
+            headings.forEach((heading, index) => { if (state.headingIds[index]) heading.id = state.headingIds[index]; });
+            state.headings = headings;
+            observeHeadings(headings);
+            return;
+        }
+        state.tocSignature = signature;
+        state.headings = [];
+        state.headingIds = [];
+
+        if (!headings.length) {
+            el.tocNav.innerHTML = '<p class="toc-empty">제목을 넣으면 목차가 만들어집니다.</p>';
+            return;
+        }
+
+        const used = new Set();
+        const items = headings.map((heading) => {
+            let id = slug(heading.textContent);
+            let candidate = id;
+            let index = 2;
+            while (used.has(candidate)) { candidate = `${id}-${index}`; index += 1; }
+            used.add(candidate);
+            heading.id = candidate;
+            return { id: candidate, level: Number(heading.tagName.slice(1)), text: heading.textContent.trim() };
+        });
+        state.headingIds = items.map((item) => item.id);
+
+        const list = document.createElement('ul');
+        list.className = 'toc-list';
+        const stack = [{ level: 0, list }];
+        items.forEach((item) => {
+            while (stack.length > 1 && item.level < stack[stack.length - 1].level) stack.pop();
+            if (item.level > stack[stack.length - 1].level && stack[stack.length - 1].list.lastElementChild) {
+                const sub = document.createElement('ul');
+                sub.className = 'toc-list';
+                stack[stack.length - 1].list.lastElementChild.appendChild(sub);
+                stack.push({ level: item.level, list: sub });
+            }
+            const li = document.createElement('li');
+            const link = document.createElement('a');
+            link.className = 'toc-link';
+            link.href = `#${item.id}`;
+            link.dataset.level = String(item.level);
+            link.dataset.target = item.id;
+            link.textContent = item.text;
+            /* the preview pane scrolls, not the window: jump by hand so the address bar stays clean */
+            link.addEventListener('click', (event) => {
+                event.preventDefault();
+                if (mediaTocDrawer()) closeTocDrawer();
+                scrollToHeading(item.id);
+            });
+            li.appendChild(link);
+            stack[stack.length - 1].list.appendChild(li);
+        });
+        el.tocNav.innerHTML = '';
+        el.tocNav.appendChild(list);
+        el.tocNav.scrollTop = 0;
+        state.headings = headings;
+        observeHeadings(headings);
+    }
+
+    function syncTopButton() {
+        if (!el.btnTop) return;
+        const on = previewScroller().scrollTop > 320;
+        el.btnTop.classList.toggle('is-on', on);
+        el.btnTop.hidden = !on;
+    }
+
+    function resetPaneScroll() {
+        const pane = previewScroller();
+        if (pane) pane.scrollTop = 0;
+        if (el.tocNav) el.tocNav.scrollTop = 0;
+        syncTopButton();
+    }
+
+    /* ---------------------------------------------------------------- view modes */
+    function setMode(mode) {
+        const narrow = mediaNarrow();
+        let next = mode;
+        if (narrow && next === 'split') next = 'edit';
+        if (next !== 'edit' && next !== 'split' && next !== 'preview') next = 'split';
+        state.mode = next;
+        el.panes.className = 'panes mode-' + next;
+        el.editorApp.classList.toggle('is-read', next === 'preview');
+        document.querySelectorAll('.view-tab').forEach((tab) => {
+            const active = tab.dataset.view === next;
+            tab.classList.toggle('is-active', active);
+            tab.setAttribute('aria-selected', active ? 'true' : 'false');
+            tab.tabIndex = active ? 0 : -1;
+        });
+        if (el.tabSplit) el.tabSplit.hidden = narrow;
+        if (next !== 'preview') {
+            hintActiveFromHeadings();
+            syncTopButton();
+        }
+    }
+
     /* ---------------------------------------------------------------- open document */
     function paintLoaded() {
         const loaded = Boolean(state.loadedKind && state.loadedName);
@@ -363,8 +846,8 @@
 
         paintLoaded();
         paintPreview();
-        paintCounts();
         paintDiary();
+        resetPaneScroll();
         scheduleSave();
         return parsed;
     }
@@ -406,108 +889,42 @@
             el.saveState.textContent = `${file.name} 파일을 열었습니다`;
             el.saveState.classList.add('is-ok');
             toast(`${file.name} 파일을 열었습니다.${parsed.hasFrontmatter ? '' : ' Frontmatter가 없어 본문만 불러왔습니다.'}`, 'ok');
+            announce(`${file.name} 파일을 열었습니다.`);
         } catch (error) {
             toast('파일을 읽지 못했습니다. 다른 파일로 다시 시도해 주세요.', 'err');
         }
     }
 
-    function buildFrontmatter() {
-        const tags = tagList();
-        const lines = [
-            '---',
-            `title: ${yamlString(el.fmTitle.value.trim() || '제목 없음')}`,
-            `date: ${el.fmDate.value || todayKst()}`,
-            `category: ${yamlString(el.fmCategory.value || CATEGORIES[0])}`,
-        ];
-        const summary = el.fmSummary.value.trim();
-        if (summary) lines.push(`summary: ${yamlString(summary)}`);
-        lines.push(`tags: [${tags.map(yamlString).join(', ')}]`);
-        lines.push('layout: post');
-        lines.push('---');
-        return lines.join('\n');
-    }
+    /* the picker and the drop zone both hand over a FileList: one document plus any images */
+    async function handleFiles(fileList) {
+        const files = Array.from(fileList || []);
+        if (!files.length) return;
+        const images = files.filter(isImageFile);
+        const docs = files.filter((file) => MD_EXT.test(file.name || ''));
+        const addedImages = images.length ? rememberLocalImages(images) : 0;
 
-    function bodyText() {
-        return el.editor.value.replace(/\s+$/, '');
-    }
-
-    function fullMarkdown() {
-        const body = bodyText();
-        if (!hasDiaryFields()) return body ? `${body}\n` : '';
-        return `${buildFrontmatter()}\n\n${body}\n`;
-    }
-
-    function download(name, content, type) {
-        const blob = new Blob([content], { type: type || 'text/plain;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = name;
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 2000);
-    }
-
-    async function copyText(text, okMessage) {
-        try {
-            if (navigator.clipboard && window.isSecureContext) {
-                await navigator.clipboard.writeText(text);
-            } else {
-                const helper = document.createElement('textarea');
-                helper.value = text;
-                helper.setAttribute('readonly', '');
-                helper.style.position = 'fixed';
-                helper.style.top = '-1000px';
-                document.body.appendChild(helper);
-                helper.select();
-                document.execCommand('copy');
-                helper.remove();
+        if (docs.length) {
+            await openLocalFile(docs[0]);
+            if (addedImages) {
+                paintPreview();
+                toast(`${docs[0].name} 파일과 이미지 ${addedImages}장을 함께 열었습니다.`, 'ok');
             }
-            toast(okMessage || '복사했습니다.');
-        } catch (error) {
-            toast('복사에 실패했습니다. 브라우저 권한을 확인해 주세요.', 'err');
+            return;
         }
+        if (addedImages) {
+            paintPreview();
+            toast(`이미지 ${addedImages}장을 열었습니다. 본문의 상대경로 이미지가 함께 보입니다.`, 'ok');
+            return;
+        }
+        toast('.md · .markdown · .txt 파일만 열 수 있습니다. 다른 파일을 선택해 주세요.', 'err');
     }
 
-    let toastTimer = 0;
-    function toast(message, kind) {
-        el.toast.innerHTML = message;
-        el.toast.className = 'toast' + (kind === 'err' ? ' is-err' : kind === 'ok' ? ' is-ok' : '');
-        el.toast.hidden = false;
-        window.clearTimeout(toastTimer);
-        toastTimer = window.setTimeout(() => { el.toast.hidden = true; }, 4200);
-    }
-
-    function setStatus(node, message, kind) {
-        node.innerHTML = message;
-        node.classList.toggle('is-ok', kind === 'ok');
-        node.classList.toggle('is-warn', kind === 'warn');
-        node.classList.toggle('is-err', kind === 'err');
-    }
-
-    /* ---------------------------------------------------------------- preview + counters */
-    let renderTimer = 0;
-    function scheduleRender() {
-        window.clearTimeout(renderTimer);
-        renderTimer = window.setTimeout(paintPreview, 120);
-    }
-
-    function paintPreview() {
-        el.preview.innerHTML = renderMarkdown(el.editor.value);
-    }
-
-    function paintCounts() {
-        const text = el.editor.value;
-        /* count prose tokens, not markdown punctuation */
-        const prose = text
-            .replace(/^\s{0,3}(#{1,6}|[-*+]|\d+[.)])\s+/gm, '')
-            .replace(/\[[ xX]\]/g, ' ')
-            .replace(/[>*_`~|]/g, ' ')
-            .trim();
-        const words = prose ? prose.split(/\s+/).filter(Boolean).length : 0;
-        el.wordCount.textContent = words.toLocaleString('ko-KR');
-        el.charCount.textContent = text.length.toLocaleString('ko-KR');
+    /* ---------------------------------------------------------------- diary preview */
+    function paintDiary() {
+        el.fmFilename.textContent = currentFileName();
+        el.fmFrontmatter.textContent = buildFrontmatter();
+        el.ghNewFile.href = newFileUrl();
+        paintFileName();
     }
 
     function paintFileName() {
@@ -573,6 +990,7 @@
             el.fmSlug.value = diary.slug || '';
             el.fmTags.value = diary.tags || '';
             el.fmSummary.value = diary.summary || '';
+            if (stored.mode) state.savedMode = stored.mode;
             if (stored.updatedAt) {
                 el.saveState.textContent = `초안 복원됨 · ${timeLabel(new Date(stored.updatedAt))}`;
                 el.saveState.classList.add('is-ok');
@@ -583,24 +1001,9 @@
         }
     }
 
-    /* ---------------------------------------------------------------- view modes */
-    function setMode(mode) {
-        const narrow = window.matchMedia('(max-width: 900px)').matches;
-        let next = mode;
-        if (narrow && next === 'split') next = 'edit';
-        state.mode = next;
-        el.panes.className = 'panes mode-' + next;
-        document.querySelectorAll('.view-tab').forEach((tab) => {
-            const active = tab.dataset.view === mode || (narrow && tab.dataset.view === next);
-            tab.classList.toggle('is-active', active);
-            tab.setAttribute('aria-selected', active ? 'true' : 'false');
-        });
-        const splitTab = $('tab-split');
-        if (splitTab) splitTab.hidden = narrow;
-    }
-
     /* ---------------------------------------------------------------- editing helpers */
     function focusEditor() {
+        if (state.mode === 'preview') setMode(mediaNarrow() ? 'edit' : 'split');
         el.editor.focus();
     }
 
@@ -622,7 +1025,7 @@
     function prefixLines(prefix, numbered) {
         const textarea = el.editor;
         const value = textarea.value;
-        let start = value.lastIndexOf('\n', textarea.selectionStart - 1) + 1;
+        const start = value.lastIndexOf('\n', textarea.selectionStart - 1) + 1;
         let end = value.indexOf('\n', textarea.selectionEnd);
         if (end === -1) end = value.length;
         const block = value.slice(start, end);
@@ -812,14 +1215,7 @@
         }
     }
 
-    /* ---------------------------------------------------------------- diary preview */
-    function paintDiary() {
-        el.fmFilename.textContent = currentFileName();
-        el.fmFrontmatter.textContent = buildFrontmatter();
-        el.ghNewFile.href = newFileUrl();
-        paintFileName();
-    }
-
+    /* ---------------------------------------------------------------- github settings */
     function githubSettings() {
         let stored = {};
         try {
@@ -866,6 +1262,14 @@
         }
     }
 
+    function showDialog(dialog) {
+        if (typeof dialog.showModal === 'function') {
+            if (!dialog.open) dialog.showModal();
+        } else {
+            dialog.setAttribute('open', '');
+        }
+    }
+
     function openSettings(reason) {
         const settings = githubSettings();
         el.ghRepo.value = settings.repo;
@@ -875,11 +1279,7 @@
         el.ghToken.value = getToken();
         paintGhState();
         if (reason) toast(reason, 'err');
-        if (typeof el.ghDialog.showModal === 'function') {
-            if (!el.ghDialog.open) el.ghDialog.showModal();
-        } else {
-            el.ghDialog.setAttribute('open', '');
-        }
+        showDialog(el.ghDialog);
         el.ghRepo.focus();
     }
 
@@ -976,6 +1376,7 @@
                 return;
             }
             setStatus(el.loadStatus, `글 ${posts.length}건을 불러왔습니다. 목록에서 고르면 바로 열립니다.`, 'ok');
+            announce(`글 ${posts.length}건을 불러왔습니다.`);
         } catch (error) {
             postIndex = new Map();
             el.postList.innerHTML = '<option value="">목록을 불러오지 못했습니다.</option>';
@@ -996,8 +1397,8 @@
         const settings = githubSettings();
         const url = `${CONTENTS_API}${settings.repo}/contents/${encodePath(target)}?ref=${encodeURIComponent(settings.branch)}`;
         state.loading = true;
-        el.btnLoadPost.disabled = true;
         const label = el.btnLoadPost.textContent;
+        el.btnLoadPost.disabled = true;
         el.btnLoadPost.textContent = '여는 중…';
         setStatus(el.loadStatus, `<code>${escapeHtml(target)}</code> 파일을 여는 중입니다.`);
         try {
@@ -1016,7 +1417,8 @@
             openMarkdownText(text, { kind: 'github', name, path: (meta && meta.path) || target, sha: (meta && meta.sha) || '' });
             setStatus(el.loadStatus, `<code>${escapeHtml((meta && meta.path) || target)}</code> 글을 열었습니다. 수정한 뒤 <strong>GitHub에 바로 커밋</strong>을 누르면 같은 경로로 덮어씁니다.`, 'ok');
             toast(`${name} 글을 불러왔습니다.`, 'ok');
-            el.publishPanel.open = true;
+            announce(`${name} 글을 불러왔습니다.`);
+            if (el.loadDialog.open) el.loadDialog.close();
         } catch (error) {
             setStatus(el.loadStatus, escapeHtml(error.message), 'err');
             toast(error.message, 'err');
@@ -1043,6 +1445,7 @@
         el.fmDate.value = todayKst();
         paintLoaded();
         paintDiary();
+        paintDocHead();
         scheduleSave();
         setStatus(el.loadStatus, `<code>${escapeHtml(previous)}</code>과의 연결을 해제했습니다. 제목과 슬러그를 비웠으므로 새 파일 이름으로 저장됩니다.`, 'ok');
         setStatus(el.publishStatus, '새 글을 쓰는 중입니다. <strong>제목</strong>과 <strong>날짜</strong>로 파일 이름이 정해집니다.');
@@ -1076,7 +1479,7 @@
         if (state.committing) return;
         const token = getToken();
         if (!token) {
-            setStatus(el.publishStatus, '먼저 GitHub 토큰을 등록해야 합니다. 아래 <strong>GitHub 설정</strong>에서 PAT를 저장하거나, <strong>이 글 .md 저장</strong>으로 받아 GitHub에 직접 올려도 됩니다.', 'warn');
+            setStatus(el.publishStatus, '먼저 GitHub 토큰을 등록해야 합니다. <strong>GitHub 설정</strong>에서 PAT를 저장하거나, <strong>이 글 .md 저장</strong>으로 받아 GitHub에 직접 올려도 됩니다.', 'warn');
             openSettings('GitHub PAT가 없습니다. 설정에서 한 번만 등록하면 됩니다.');
             return;
         }
@@ -1100,7 +1503,7 @@
         const headers = apiHeaders(token);
 
         if (editing && !window.confirm(`불러온 글 "${path}"을(를) 덮어씁니다. 계속할까요?`)) {
-            setStatus(el.publishStatus, '덮어쓰기를 취소했습니다. 새 파일로 저장하려면 <strong>새 글로 전환</strong>을 눌러 주세요.');
+            setStatus(el.publishStatus, '덮어쓰기를 취소했습니다. 새 파일로 저장하려면 파일 바의 <strong>새 글로 전환</strong>을 눌러 주세요.');
             return;
         }
 
@@ -1151,6 +1554,7 @@
                 'ok'
             );
             toast(`커밋 완료 · ${path}`, 'ok');
+            announce('커밋을 마쳤습니다.');
         } catch (error) {
             setStatus(el.publishStatus, `${escapeHtml(error.message)}<br>토큰 권한(Contents: Read &amp; Write)과 저장소 이름을 확인해 주세요.`, 'err');
             toast(error.message, 'err');
@@ -1172,11 +1576,34 @@
         return map[status] ? `${stage} 실패 — ${map[status]}` : `${stage} 실패 — HTTP ${status}`;
     }
 
-    function escapeHtml(value) {
-        return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    /* ---------------------------------------------------------------- exports */
+    function downloadPost() {
+        const content = fullMarkdown();
+        if (!content.trim()) {
+            toast('내보낼 내용이 없습니다.', 'err');
+            return;
+        }
+        download(hasDiaryFields() ? currentFileName() : 'document.md', content, 'text/markdown;charset=utf-8');
+        toast('마크다운 파일을 내려받았습니다.', 'ok');
+        announce('마크다운 파일을 내려받았습니다.');
     }
 
-    /* ---------------------------------------------------------------- html export */
+    function exportHtml() {
+        const clone = el.preview.cloneNode(true);
+        clone.querySelectorAll('.md-code-head').forEach((node) => node.remove());
+        clone.querySelectorAll('img').forEach((image) => {
+            const raw = image.getAttribute('data-origin-src') || image.getAttribute('src');
+            if (!raw) return;
+            image.setAttribute('src', htmlExportSrc(raw));
+            image.removeAttribute('data-origin-src');
+        });
+        const title = el.fmTitle.value.trim() || bodyTitle() || 'HD2Lab Document';
+        const html = standaloneHtml(title, clone.innerHTML);
+        const name = (hasDiaryFields() ? currentSlug() : 'document') + '.html';
+        download(name, html, 'text/html;charset=utf-8');
+        toast('단독 HTML 파일을 내려받았습니다.', 'ok');
+    }
+
     function standaloneHtml(title, bodyHtml) {
         const safeTitle = escapeHtml(title || 'HD2Lab Document');
         return `<!DOCTYPE html>
@@ -1215,16 +1642,22 @@ footer{margin:56px auto 0;max-width:760px;color:#8B8598;font-size:11px;letter-sp
 <main>
 ${bodyHtml}
 </main>
-<footer>HD2Lab · Markdown Editor</footer>
+<footer>HD2Markdown Editor</footer>
 </body>
 </html>
 `;
     }
 
+    /* ---------------------------------------------------------------- export menu */
+    function setExportMenu(open) {
+        if (!el.exportMenu || !el.btnExportMenu) return;
+        el.exportMenu.hidden = !open;
+        el.btnExportMenu.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+
     /* ---------------------------------------------------------------- handlers */
     function onInput() {
         paintPreview();
-        paintCounts();
         paintDiary();
         scheduleSave();
     }
@@ -1239,8 +1672,24 @@ ${bodyHtml}
     }
 
     function wireViews() {
+        const tablist = document.querySelector('.view-switch');
+        const items = () => Array.from(document.querySelectorAll('.view-tab')).filter((tab) => !tab.hidden);
         document.querySelectorAll('.view-tab').forEach((tab) => {
             tab.addEventListener('click', () => setMode(tab.dataset.view));
+        });
+        tablist.addEventListener('keydown', (event) => {
+            const list = items();
+            const index = list.indexOf(document.activeElement);
+            if (index === -1) return;
+            let next = -1;
+            if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = (index + 1) % list.length;
+            else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = (index - 1 + list.length) % list.length;
+            else if (event.key === 'Home') next = 0;
+            else if (event.key === 'End') next = list.length - 1;
+            if (next === -1) return;
+            event.preventDefault();
+            list[next].focus();
+            setMode(list[next].dataset.view);
         });
         window.addEventListener('resize', () => setMode(state.mode));
     }
@@ -1296,8 +1745,8 @@ ${bodyHtml}
     function wireLoad() {
         el.btnOpenLocal.addEventListener('click', () => el.fileInput.click());
         el.fileInput.addEventListener('change', () => {
-            const file = el.fileInput.files && el.fileInput.files[0];
-            openLocalFile(file);
+            const files = el.fileInput.files;
+            handleFiles(files);
             el.fileInput.value = '';
         });
         el.btnNewDoc.addEventListener('click', detachSource);
@@ -1307,6 +1756,11 @@ ${bodyHtml}
             const path = el.postList.value;
             el.btnLoadPost.disabled = !path;
             if (path) loadPost(path);
+        });
+        $('btnLoadDialog').addEventListener('click', () => {
+            el.loadTarget.textContent = loadTargetLabel(githubSettings());
+            showDialog(el.loadDialog);
+            if (!el.postList.options.length || el.postList.disabled) el.btnListPosts.focus();
         });
         wireDropZone();
     }
@@ -1341,44 +1795,89 @@ ${bodyHtml}
             event.preventDefault();
             depth = 0;
             el.dropOverlay.hidden = true;
-            const files = event.dataTransfer.files ? Array.prototype.slice.call(event.dataTransfer.files) : [];
-            const target = files.filter((file) => MD_EXT.test(file.name || ''))[0] || files[0];
-            if (target) openLocalFile(target);
+            handleFiles(event.dataTransfer.files ? Array.prototype.slice.call(event.dataTransfer.files) : []);
         });
         window.addEventListener('dragend', () => { depth = 0; el.dropOverlay.hidden = true; });
         window.addEventListener('blur', () => { depth = 0; el.dropOverlay.hidden = true; });
     }
 
-    function downloadPost() {
-        const content = fullMarkdown();
-        if (!content.trim()) {
-            toast('내보낼 내용이 없습니다.', 'err');
-            return;
-        }
-        download(hasDiaryFields() ? currentFileName() : 'document.md', content, 'text/markdown;charset=utf-8');
-        toast('마크다운 파일을 내려받았습니다.', 'ok');
+    /* a form inside <dialog method="dialog"> would close on Enter — keep the fields usable */
+    function wireDialogs() {
+        [el.publishDialog, el.loadDialog, el.ghDialog].forEach((dialog) => {
+            const form = dialog.querySelector('form');
+            if (!form) return;
+            form.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' && event.target && event.target.tagName === 'INPUT') {
+                    event.preventDefault();
+                }
+            });
+        });
+        $('btnHelp').addEventListener('click', () => showDialog(el.helpDialog));
+        $('btnPublish').addEventListener('click', () => {
+            paintDiary();
+            showDialog(el.publishDialog);
+            el.fmTitle.focus();
+            el.fmTitle.select();
+        });
+    }
+
+    function wireExport() {
+        el.btnExportMenu.addEventListener('click', (event) => {
+            event.stopPropagation();
+            setExportMenu(el.exportMenu.hidden);
+        });
+        el.exportMenu.addEventListener('click', (event) => {
+            const item = event.target.closest('[data-export]');
+            if (!item) return;
+            setExportMenu(false);
+            const action = item.dataset.export;
+            if (action === 'html') exportHtml();
+            else if (action === 'md') downloadPost();
+            else if (action === 'print') window.print();
+            else if (action === 'copy-md') copyText(fullMarkdown(), '마크다운을 복사했습니다.');
+            else if (action === 'copy-html') copyText(renderMarkdown(el.editor.value), 'HTML을 복사했습니다.');
+        });
+        document.addEventListener('click', (event) => {
+            if (event.target.closest && event.target.closest('.split-btn')) return;
+            setExportMenu(false);
+        });
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') setExportMenu(false);
+        });
+    }
+
+    function wireToc() {
+        el.btnToc.addEventListener('click', () => {
+            const open = el.tocPanel.classList.toggle('is-open');
+            el.btnToc.setAttribute('aria-expanded', open ? 'true' : 'false');
+            el.btnToc.setAttribute('aria-label', open ? '목차 닫기' : '목차 열기');
+            if (open) el.tocNav.scrollTop = 0;
+        });
+        el.btnTocClose.addEventListener('click', closeTocDrawer);
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && el.tocPanel.classList.contains('is-open')) closeTocDrawer();
+        });
+        el.btnTop.addEventListener('click', () => {
+            const pane = previewScroller();
+            const behavior = reduceMotion() ? 'auto' : 'smooth';
+            if (typeof pane.scrollTo === 'function') pane.scrollTo({ top: 0, behavior });
+            else pane.scrollTop = 0;
+            const first = el.tocNav.querySelector('.toc-link');
+            setActiveToc(first ? first.dataset.target : '');
+        });
+        el.docPreview.addEventListener('scroll', () => {
+            if (el.docPreview._raf) return;
+            el.docPreview._raf = window.requestAnimationFrame(() => {
+                el.docPreview._raf = 0;
+                syncTopButton();
+                hintActiveFromHeadings();
+            });
+        }, { passive: true });
     }
 
     function wireActions() {
         $('btnDownloadMd').addEventListener('click', downloadPost);
         $('btnDownloadPost').addEventListener('click', downloadPost);
-
-        $('btnCopyMd').addEventListener('click', () => {
-            copyText(fullMarkdown(), '마크다운을 복사했습니다.');
-        });
-
-        $('btnCopyHtml').addEventListener('click', () => {
-            copyText(renderMarkdown(el.editor.value), 'HTML을 복사했습니다.');
-        });
-
-        $('btnExportHtml').addEventListener('click', () => {
-            const title = el.fmTitle.value.trim() || (el.editor.value.match(/^#\s+(.+)$/m) || [])[1] || 'HD2Lab Document';
-            const html = standaloneHtml(title, renderMarkdown(el.editor.value));
-            const name = (hasDiaryFields() ? currentSlug() : 'document') + '.html';
-            download(name, html, 'text/html;charset=utf-8');
-            toast('단독 HTML 파일을 내려받았습니다.', 'ok');
-        });
-
         $('btnReset').addEventListener('click', () => {
             if (!window.confirm('작성 중인 본문과 Diary 입력값을 모두 지웁니다. 계속할까요?')) return;
             try { window.localStorage.removeItem(DRAFT_KEY); } catch (error) { /* ignore */ }
@@ -1391,18 +1890,18 @@ ${bodyHtml}
             el.fmCategory.value = CATEGORIES[0];
             el.saveState.textContent = '초기화됨 · 아직 저장된 초안 없음';
             el.saveState.classList.remove('is-ok');
+            detachSilently();
             onInput();
             el.editor.focus();
         });
-
         $('btnOpenSettings').addEventListener('click', () => openSettings());
         $('btnSaveSettings').addEventListener('click', saveGithubSettings);
         $('btnForgetToken').addEventListener('click', forgetToken);
         $('btnCommit').addEventListener('click', commitToGithub);
 
         [el.fmTitle, el.fmCategory, el.fmDate, el.fmSlug, el.fmTags, el.fmSummary].forEach((input) => {
-            input.addEventListener('input', () => { paintDiary(); scheduleSave(); });
-            input.addEventListener('change', () => { paintDiary(); scheduleSave(); });
+            input.addEventListener('input', () => { paintDiary(); paintDocHead(); scheduleSave(); });
+            input.addEventListener('change', () => { paintDiary(); paintDocHead(); scheduleSave(); });
         });
 
         el.editor.addEventListener('input', onInput);
@@ -1414,6 +1913,16 @@ ${bodyHtml}
         });
     }
 
+    function detachSilently() {
+        state.loadedKind = '';
+        state.loadedName = '';
+        state.loadedPath = '';
+        state.loadedSha = '';
+        paintLoaded();
+        paintDiary();
+        paintDocHead();
+    }
+
     /* ---------------------------------------------------------------- boot */
     function boot() {
         if (!window.markdownit) {
@@ -1421,17 +1930,20 @@ ${bodyHtml}
             return;
         }
         loadDraft();
-        paintPreview();
-        paintCounts();
-        paintDiary();
         paintLoaded();
+        paintPreview();
+        paintDiary();
+        paintDocHead();
         paintGhState();
-        setMode(window.matchMedia('(max-width: 900px)').matches ? 'edit' : 'split');
+        setMode(state.savedMode || (mediaNarrow() ? 'edit' : 'split'));
         wireToolbar();
         wireViews();
         wireKeys();
         wireActions();
         wireLoad();
+        wireDialogs();
+        wireExport();
+        wireToc();
         el.ghNewFile.href = newFileUrl();
         window.addEventListener('beforeunload', () => {
             if (state.dirty) saveDraft();
@@ -1444,6 +1956,7 @@ ${bodyHtml}
     /* exposed for tests */
     window.HD2Editor = {
         slugify,
+        slug,
         currentFileName,
         buildFrontmatter,
         fullMarkdown,
@@ -1454,6 +1967,9 @@ ${bodyHtml}
         parseFrontmatter,
         openMarkdownText,
         openLocalFile,
+        handleFiles,
+        rememberLocalImages,
+        findLocalImage,
         listPosts,
         loadPost,
         detachSource,
@@ -1462,6 +1978,12 @@ ${bodyHtml}
         uploadImage,
         imageFileName,
         insertImageMarkdown,
+        buildToc,
+        paintPreview,
+        paintDocHead,
+        scrollToHeading,
+        setExportMenu,
+        getState: () => ({ mode: state.mode, headings: state.headings.length, localImages: state.localImages.size }),
         getLoaded: () => ({ kind: state.loadedKind, name: state.loadedName, path: state.loadedPath, sha: state.loadedSha }),
     };
 })();
