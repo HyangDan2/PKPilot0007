@@ -1995,17 +1995,20 @@
     }
 
 
+    async function buildPortablePost() {
+        let markdown=fullMarkdown();
+        if(!markdown.trim())throw Error('내보낼 내용이 없습니다.');
+        if(state.exportMetadata && !/^---\n/.test(markdown)) markdown='---\n'+state.exportMetadata+'\n---\n\n'+markdown;
+        const base=currentFileName().split(/[\\/]/).pop().replace(/\.(?:md|markdown)$/i,'')||'document';
+        const bundle=await window.PortableExport.buildBundle(markdown,collectImage,base);
+        return {base,bundle};
+    }
     async function exportZip() {
         const button=$('btnExportZip');
         if(button.disabled)return;
-        let markdown=fullMarkdown();
-        if(!markdown.trim()){toast('내보낼 내용이 없습니다.','err');return;}
-        // Metadata belongs in a standard package even when the direct-commit preset disables YAML.
-        if(state.exportMetadata && !/^---\n/.test(markdown)) markdown='---\n'+state.exportMetadata+'\n---\n\n'+markdown;
         button.disabled=true;
         try {
-            const base=currentFileName().split(/[\\/]/).pop().replace(/\.(?:md|markdown)$/i,'')||'document';
-            const bundle=await window.PortableExport.buildBundle(markdown,collectImage,base);
+            const {base,bundle}=await buildPortablePost();
             const zip=new window.JSZip();
             zip.folder('posts'); zip.folder('assets');
             zip.file('posts/'+base+'.md',bundle.markdown);
@@ -2019,15 +2022,13 @@
         finally {button.disabled=false;}
     }
 
-    function downloadPost() {
-        const content = fullMarkdown();
-        if (!content.trim()) {
-            toast('내보낼 내용이 없습니다.', 'err');
-            return;
-        }
-        download(hasDiaryFields() ? currentFileName() : 'document.md', content, 'text/markdown;charset=utf-8');
-        toast('마크다운 파일을 내려받았습니다.', 'ok');
-        announce('마크다운 파일을 내려받았습니다.');
+    async function downloadPost() {
+        try {
+            const {base,bundle}=await buildPortablePost();
+            download(base+'.md',bundle.markdown,'text/markdown;charset=utf-8');
+            toast(bundle.images?'MD 저장 완료 · 이미지는 동일한 ZIP의 assets/를 사용하세요.':'마크다운 파일을 내려받았습니다.',bundle.images?'warn':'ok');
+            announce('마크다운 파일을 내려받았습니다.');
+        } catch(error) {toast('MD 저장 실패: '+escapeHtml(error.message),'err');}
     }
 
     function exportHtml() {
