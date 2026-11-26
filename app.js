@@ -164,6 +164,8 @@
         dirty: false,
         committing: false,
         loadedKind: '',
+        exportMetadata: '',
+        exportSource: null,
         loadedName: '',
         loadedPath: '',
         loadedSha: '',
@@ -506,6 +508,7 @@
         if (summary) lines.push(`summary: ${yamlString(summary)}`);
         lines.push(`tags: [${tags.map(yamlString).join(', ')}]`);
         lines.push('layout: post');
+        if (state.exportMetadata) lines.push(state.exportMetadata);
         lines.push('---');
         return lines.join('\n');
     }
@@ -884,6 +887,12 @@
         const parsed = parseFrontmatter(text);
         if (parsed.hasFrontmatter) applyDiaryData(parsed.data);
         else clearDiaryFields();
+        const normalized = stripBom(String(text)).replace(/\r\n?/g, '\n');
+        const fm = /^---[ \t]*\n([\s\S]*?)\n---[ \t]*(?:\n|$)/.exec(normalized);
+        // Retain unsupported fields verbatim rather than losing cover/thumbnail metadata.
+        const managed = /^(?:title|date|published|pubdate|category|categories|section|summary|description|excerpt|tags|keywords|layout|slug)\s*:/i;
+        state.exportMetadata = fm ? fm[1].split(/\n(?=[A-Za-z0-9_-]+\s*:)/).filter(block=>!managed.test(block)).join('\n') : '';
+        state.exportSource = source && source.kind === 'github' ? { ...githubSettings(), path: source.path } : null;
 
         const body = parsed.body.replace(/\s+$/, '');
         el.editor.value = body ? `${body}\n` : '';
@@ -1013,6 +1022,8 @@
                 summary: el.fmSummary.value,
             },
             mode: state.mode,
+            exportMetadata: state.exportMetadata,
+            exportSource: state.exportSource,
         };
         try {
             window.localStorage.setItem(DRAFT_KEY, JSON.stringify(payload));
@@ -1036,6 +1047,8 @@
         el.fmDate.value = todayKst();
         if (stored && typeof stored.body === 'string' && stored.body.trim()) {
             el.editor.value = stored.body;
+            state.exportMetadata = typeof stored.exportMetadata === 'string' ? stored.exportMetadata : '';
+            state.exportSource = stored.exportSource || null;
             const diary = stored.diary || {};
             el.fmTitle.value = diary.title || '';
             if (diary.category) setCategoryValue(diary.category);
@@ -1269,6 +1282,9 @@
             const published = publicPath
                 ? await putRepoFile(token, settings, publicPath, content, `chore(assets): 이미지 배포본 추가 — ${filename}`)
                 : null;
+            rememberLocalImages([file]);
+            const uploaded = findLocalImage(file.name);
+            if (uploaded) state.localImages.set(normalizePath(imageUrl), uploaded);
             insertImageMarkdown(alt, imageUrl);
             const overwritten = Boolean(source.sha || (published && published.sha));
             const places = publicPath
@@ -1697,6 +1713,7 @@
     function detachSource() {
         if (!state.loadedKind) return;
         const previous = state.loadedPath || state.loadedName;
+        state.exportMetadata = '';
         state.loadedKind = '';
         state.loadedName = '';
         state.loadedPath = '';
@@ -1847,15 +1864,171 @@
     }
 
     /* ---------------------------------------------------------------- exports */
-    function downloadPost() {
-        const content = fullMarkdown();
-        if (!content.trim()) {
-            toast('내보낼 내용이 없습니다.', 'err');
-            return;
+    function absoluteImageCandidates(value) {
+        const raw=String(value||'').trim();
+        if (/^https?:\/\//i.test(raw)) return [raw];
+        if (/^\/\//.test(raw)) return [location.protocol+raw];
+        if (/^blob:/i.test(raw)) return [raw];
+        if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return [];
+        const settings=state.exportSource||githubSettings();
+        if(!settings.repo||!settings.branch) return [];
+        const root='https://raw.githubusercontent.com/'+settings.repo+'/'+encodeURIComponent(settings.branch)+'/';
+        const result=[];
+        const add=path=>{try{const url=new URL(path,root);if(url.href.startsWith(root)&&!result.includes(url.href))result.push(url.href)}catch(error){}};
+        const prefix=String(settings.imageUrlDir||'').replace(/^\.\//,'').replace(/^\/+|\/+$/g,'');
+        const clean=raw.replace(/^\.\//,'').replace(/^\/+/,'');
+        if(prefix && clean.startsWith(prefix+'/')) {
+            const suffix=clean.slice(prefix.length+1);
+            if(settings.imageSrcDir) add(joinPath(settings.imageSrcDir,suffix));
+            if(settings.imagePublicDir) add(joinPath(settings.imagePublicDir,suffix));
         }
-        download(hasDiaryFields() ? currentFileName() : 'document.md', content, 'text/markdown;charset=utf-8');
-        toast('마크다운 파일을 내려받았습니다.', 'ok');
-        announce('마크다운 파일을 내려받았습니다.');
+        if(!raw.startsWith('/')) {
+            const sourcePath=state.exportSource?.path||state.loadedPath||joinPath(settings.path,currentFileName());
+            try {add(new URL(raw,new URL(sourcePath,root)).href)} catch(error){}
+        }
+        add(clean);
+        return result;
+    }
+    const MIME_EXT = {
+        'image/png': 'png', 'image/apng': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg',
+        'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif', 'image/svg+xml': 'svg',
+        'image/bmp': 'bmp', 'image/x-icon': 'ico', 'image/vnd.microsoft.icon': 'ico',
+        'image/tiff': 'tif', 'image/heic': 'heic', 'image/heif': 'heif',
+    };
+
+    function extensionFromMime(mime) {
+        return MIME_EXT[String(mime || '').toLowerCase().split(';')[0].trim()] || '';
+    }
+
+    function extensionFromName(name) {
+        const hit = /\.([a-z0-9]{1,5})$/i.exec(String(name || '').split(/[?#]/)[0]);
+        if (!hit) return '';
+        const ext = hit[1].toLowerCase();
+        return ext === 'jpeg' ? 'jpg' : ext === 'tiff' ? 'tif' : ext;
+    }
+
+    function sniffExtension(bytes) {
+        if (!bytes || bytes.length < 4) return '';
+        if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return 'png';
+        if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return 'jpg';
+        if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return 'gif';
+        if (bytes[0] === 0x42 && bytes[1] === 0x4D) return 'bmp';
+        if (bytes.length > 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
+            && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'webp';
+        return '';
+    }
+
+    function looksLikeSvg(bytes) {
+        if (!bytes || !bytes.length) return false;
+        const head = String.fromCharCode.apply(null, Array.prototype.slice.call(bytes, 0, Math.min(bytes.length, 256)));
+        return /^\s*(?:<\?xml|<!--|<svg)/i.test(head);
+    }
+
+    function decodeDataImage(value) {
+        const hit = /^data:(image\/[a-z0-9.+-]+)((?:;[^,;]*)*),([\s\S]*)$/i.exec(String(value || ''));
+        if (!hit) return null;
+        const mime = hit[1].toLowerCase();
+        const params = hit[2] || '';
+        const payload = hit[3] || '';
+        try {
+            if (/;base64/i.test(params)) {
+                const binary = window.atob(payload.replace(/[\s\r\n]+/g, ''));
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+                return bytes.length ? { bytes, ext: extensionFromMime(mime) || 'png' } : null;
+            }
+            const bytes = new TextEncoder().encode(decodeURIComponent(payload));
+            return bytes.length ? { bytes, ext: extensionFromMime(mime) || 'svg' } : null;
+        } catch (error) {
+            return null;
+        }
+    }
+
+    function bytesFrom(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(new Uint8Array(reader.result));
+            reader.onerror = () => reject(reader.error || new Error('read error'));
+            reader.readAsArrayBuffer(file);
+        });
+    }
+
+
+    /* one image url → bytes, from an inline data uri, a file the user opened, or the network */
+    async function collectImage(url) {
+        const value = String(url || '').trim();
+        if (!value) return null;
+        if (/^data:/i.test(value)) return decodeDataImage(value);
+
+        if (!/^(?:https?:)?\/\//i.test(value)) {
+            const local = findLocalImage(value);
+            if (local) {
+                try {
+                    const bytes = await bytesFrom(local.file);
+                    if (bytes.length) {
+                        const ext = extensionFromMime(local.file.type)
+                            || extensionFromName(local.file.name)
+                            || sniffExtension(bytes)
+                            || (looksLikeSvg(bytes) ? 'svg' : 'png');
+                        return { bytes, ext, origin: 'local' };
+                    }
+                } catch (error) { /* fall through to fetch */ }
+            }
+        }
+
+        for (const absolute of absoluteImageCandidates(value)) {
+            try {
+                const response = await fetch(absolute, { mode: 'cors', credentials: 'omit' });
+                if (!response.ok) continue;
+                const blob = await response.blob();
+                if (/^(?:text\/html|application\/json)(?:;|$)/i.test(blob.type)) continue;
+                const bytes = new Uint8Array(await blob.arrayBuffer());
+                if (!bytes.length) continue;
+                const ext = extensionFromMime(blob.type)
+                    || extensionFromName(absolute)
+                    || sniffExtension(bytes)
+                    || (looksLikeSvg(bytes) ? 'svg' : 'png');
+                return { bytes, ext, origin: 'remote' };
+            } catch (error) { /* try the next candidate */ }
+        }
+        return null;
+    }
+
+
+    async function buildPortablePost() {
+        let markdown=fullMarkdown();
+        if(!markdown.trim())throw Error('내보낼 내용이 없습니다.');
+        if(state.exportMetadata && !/^---\n/.test(markdown)) markdown='---\n'+state.exportMetadata+'\n---\n\n'+markdown;
+        const base=currentFileName().split(/[\\/]/).pop().replace(/\.(?:md|markdown)$/i,'')||'document';
+        const bundle=await window.PortableExport.buildBundle(markdown,collectImage,base);
+        return {base,bundle};
+    }
+    async function exportZip() {
+        const button=$('btnExportZip');
+        if(button.disabled)return;
+        button.disabled=true;
+        try {
+            const {base,bundle}=await buildPortablePost();
+            const zip=new window.JSZip();
+            zip.folder('posts'); zip.folder('assets');
+            zip.file('posts/'+base+'.md',bundle.markdown);
+            bundle.assets.forEach(asset=>zip.file(asset.path,asset.bytes,{binary:true}));
+            const blob=await zip.generateAsync({type:'blob',compression:'DEFLATE'});
+            const url=URL.createObjectURL(blob), link=document.createElement('a');
+            link.href=url;link.download=base+'.zip';document.body.appendChild(link);link.click();link.remove();
+            setTimeout(()=>URL.revokeObjectURL(url),1000);
+            toast('표준 ZIP 저장 완료 · 이미지 '+bundle.images+'개','ok');
+        } catch(error) {toast('ZIP 저장 실패: '+escapeHtml(error.message),'err');}
+        finally {button.disabled=false;}
+    }
+
+    async function downloadPost() {
+        try {
+            const {base,bundle}=await buildPortablePost();
+            download(base+'.md',bundle.markdown,'text/markdown;charset=utf-8');
+            toast(bundle.images?'MD 저장 완료 · 이미지는 동일한 ZIP의 assets/를 사용하세요.':'마크다운 파일을 내려받았습니다.',bundle.images?'warn':'ok');
+            announce('마크다운 파일을 내려받았습니다.');
+        } catch(error) {toast('MD 저장 실패: '+escapeHtml(error.message),'err');}
     }
 
     function exportHtml() {
@@ -2098,6 +2271,7 @@ ${bodyHtml}
             const action = item.dataset.export;
             if (action === 'html') exportHtml();
             else if (action === 'md') downloadPost();
+            else if (action === 'zip') exportZip();
             else if (action === 'print') window.print();
             else if (action === 'copy-md') copyText(fullMarkdown(), '마크다운을 복사했습니다.');
             else if (action === 'copy-html') copyText(renderMarkdown(el.editor.value), 'HTML을 복사했습니다.');
@@ -2190,6 +2364,8 @@ ${bodyHtml}
     }
 
     function detachSilently() {
+        state.exportMetadata = '';
+        state.exportSource = null;
         state.loadedKind = '';
         state.loadedName = '';
         state.loadedPath = '';
@@ -2242,6 +2418,7 @@ ${bodyHtml}
         currentFileName,
         buildFrontmatter,
         fullMarkdown,
+        exportZip,
         renderMarkdown,
         utf8ToBase64,
         commitToGithub,

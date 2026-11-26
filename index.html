@@ -38,7 +38,9 @@
     <script src="js/vendor/markdown-it.min.js" defer></script>
     <script src="js/vendor/highlight.min.js" defer></script>
     <script src="js/vendor/purify.min.js" defer></script>
-    <script src="app.js?v=20261122-settings" defer></script>
+    <script src="js/vendor/jszip.min.js" defer></script>
+    <script src="js/portable-export.js?v=2" defer></script>
+    <script src="app.js?v=20261126-portable-export-v2" defer></script>
 </head>
 <body>
     <a class="skip-link" href="#editor">본문으로 건너뛰기</a>
@@ -126,6 +128,7 @@
                         <ul class="menu" id="exportMenu" role="menu" aria-labelledby="btnExportMenu" hidden>
                             <li role="none"><button type="button" role="menuitem" id="btnExportHtml" data-export="html"><span>HTML로 저장</span><span class="menu-note" aria-hidden="true">.html</span></button></li>
                             <li role="none"><button type="button" role="menuitem" id="btnExportMd" data-export="md"><span>마크다운으로 저장</span><span class="menu-note" aria-hidden="true">.md</span></button></li>
+                            <li role="none"><button type="button" role="menuitem" id="btnExportZip" data-export="zip"><span>표준 ZIP으로 저장</span><span class="menu-note" aria-hidden="true">.zip</span></button></li>
                             <li role="none"><button type="button" role="menuitem" id="btnPrint" data-export="print"><span>인쇄 / PDF로 저장</span><span class="menu-note" aria-hidden="true">PDF</span></button></li>
                             <li role="none"><button type="button" role="menuitem" id="btnCopyMd" data-export="copy-md"><span>마크다운 복사</span><span class="menu-note" aria-hidden="true">MD</span></button></li>
                             <li role="none"><button type="button" role="menuitem" id="btnCopyHtml" data-export="copy-html"><span>HTML 복사</span><span class="menu-note" aria-hidden="true">HTML</span></button></li>
