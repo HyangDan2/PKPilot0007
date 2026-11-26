@@ -178,6 +178,8 @@
         observer: null,
         tocSignature: '',
         localImages: new Map(),
+        localDocPath: '',
+        folderRoot: '',
     };
 
     const mediaNarrow = () => window.matchMedia('(max-width: 900px)').matches;
@@ -532,39 +534,25 @@
         return /^image\//i.test(file.type || '') || IMAGE_NAME_RE.test(file.name || '');
     }
 
-    /* local images are kept by file name and relative path so the preview can find them */
+    function clearLocalImages() {
+        const urls=new Set(Array.from(state.localImages.values(),entry=>entry.url));
+        urls.forEach(url=>URL.revokeObjectURL(url));state.localImages.clear();
+    }
     function rememberLocalImages(files) {
-        let added = 0;
-        files.forEach((file) => {
-            if (!isImageFile(file)) return;
-            const entry = {
-                file,
-                name: file.name,
-                relative: file.webkitRelativePath || '',
-                url: URL.createObjectURL(file),
-            };
-            const keys = [normalizePath(entry.relative), normalizePath(entry.name)].filter(Boolean);
-            if (!keys.length) return;
-            keys.forEach((key) => state.localImages.set(key, entry));
-            added += 1;
+        let added=0;
+        Array.from(files||[]).forEach(item=>{
+            const record=window.PortableImport.fileRecord(item);
+            if(!record||!isImageFile(record.file))return;
+            const key=normalizePath(record.relative||record.file.name);
+            const previous=state.localImages.get(key);
+            if(previous)URL.revokeObjectURL(previous.url);
+            state.localImages.set(key,{file:record.file,name:record.file.name,relative:normalizePath(record.relative),url:URL.createObjectURL(record.file)});
+            added++;
         });
         return added;
     }
-
     function findLocalImage(value) {
-        const key = normalizePath(value);
-        if (!key) return null;
-        const direct = state.localImages.get(key);
-        if (direct) return direct;
-        const base = key.split('/').pop();
-        const byBase = state.localImages.get(base);
-        if (byBase) return byBase;
-        let hit = null;
-        state.localImages.forEach((entry, mapKey) => {
-            if (hit) return;
-            if (mapKey.endsWith('/' + key) || key.endsWith('/' + mapKey)) hit = entry;
-        });
-        return hit;
+        return window.HD2Paths.findInLocalMap(state.localImages,value,state.localDocPath,state.folderRoot);
     }
 
     function previewImageSrc(raw) {
@@ -574,18 +562,23 @@
         const local = findLocalImage(value);
         if (local) return local.url;
         if (/^https?:\/\//i.test(value) || /^\/\//.test(value)) return value;
+        if (state.loadedKind === 'local') return '';
         return value;
     }
 
     function refreshImageSources() {
-        el.preview.querySelectorAll('img').forEach((image) => {
-            const raw = image.getAttribute('src');
-            if (!raw) return;
-            const next = previewImageSrc(raw);
-            if (next && next !== raw) {
-                image.setAttribute('data-origin-src', raw);
-                image.setAttribute('src', next);
-            }
+        el.preview.querySelectorAll('img').forEach(image=>{
+            const raw=image.getAttribute('data-origin-src')||image.getAttribute('src');
+            if(!raw)return;
+            image.setAttribute('data-origin-src',raw);
+            const next=previewImageSrc(raw);
+            if(next)image.setAttribute('src',next);
+            else {image.removeAttribute('src');image.title='이미지 파일을 찾을 수 없습니다: '+raw;}
+        });
+        el.preview.querySelectorAll('a[href]').forEach(link=>{
+            const raw=link.getAttribute('data-origin-href')||link.getAttribute('href');
+            const local=findLocalImage(raw);
+            if(local){link.setAttribute('data-origin-href',raw);link.setAttribute('href',local.url);}
         });
     }
 
@@ -898,6 +891,8 @@
         el.editor.value = body ? `${body}\n` : '';
 
         state.loadedKind = (source && source.kind) || 'local';
+        state.localDocPath = state.loadedKind==='local' ? (source?.localPath||source?.name||'') : '';
+        if(state.loadedKind!=='local') {state.folderRoot='';clearLocalImages();}
         state.loadedName = (source && source.name) || '';
         state.loadedPath = (source && source.path) || '';
         state.loadedSha = (source && source.sha) || '';
@@ -931,7 +926,7 @@
         }
     }
 
-    async function openLocalFile(file) {
+    async function openLocalFile(file, relative) {
         if (!file) return;
         if (!MD_EXT.test(file.name || '')) {
             toast('.md · .markdown · .txt 파일만 열 수 있습니다. 다른 파일을 선택해 주세요.', 'err');
@@ -943,7 +938,7 @@
         }
         try {
             const text = await readFileText(file);
-            const parsed = openMarkdownText(text, { kind: 'local', name: file.name, path: '', sha: '' });
+            const parsed = openMarkdownText(text, { kind: 'local', name: file.name, path: '', sha: '', localPath: relative||file.webkitRelativePath||file.name });
             el.saveState.textContent = `${file.name} 파일을 열었습니다`;
             el.saveState.classList.add('is-ok');
             toast(`${file.name} 파일을 열었습니다.${parsed.hasFrontmatter ? '' : ' Frontmatter가 없어 본문만 불러왔습니다.'}`, 'ok');
@@ -953,28 +948,29 @@
         }
     }
 
-    /* the picker and the drop zone both hand over a FileList: one document plus any images */
     async function handleFiles(fileList) {
-        const files = Array.from(fileList || []);
-        if (!files.length) return;
-        const images = files.filter(isImageFile);
-        const docs = files.filter((file) => MD_EXT.test(file.name || ''));
-        const addedImages = images.length ? rememberLocalImages(images) : 0;
-
-        if (docs.length) {
-            await openLocalFile(docs[0]);
-            if (addedImages) {
-                paintPreview();
-                toast(`${docs[0].name} 파일과 이미지 ${addedImages}장을 함께 열었습니다.`, 'ok');
-            }
+        let records=Array.from(fileList||[]).map(window.PortableImport.fileRecord).filter(Boolean);
+        if(!records.length)return;
+        const zip=records.find(r=>window.PortableImport.isZip(r.file));
+        if(zip){
+            if(records.length!==1){toast('ZIP은 한 번에 하나만 열어 주세요.','err');return;}
+            try{records=await window.PortableImport.readPackage(zip.file,window.JSZip);}
+            catch(error){toast('ZIP 열기 실패: '+escapeHtml(error.message),'err');return;}
+        }
+        const docs=records.filter(r=>MD_EXT.test(r.file.name||''));
+        const images=records.filter(r=>isImageFile(r.file));
+        if(docs.length){
+            clearLocalImages();
+            docs.sort((a,b)=>String(a.relative).localeCompare(String(b.relative)));
+            const primary=docs[0];
+            state.folderRoot=window.PortableImport.packageRoot(primary.relative,(primary.relative||'').split('/').slice(0,1).join('/'));
+            rememberLocalImages(images);
+            await openLocalFile(primary.file,primary.relative);
+            if(images.length)toast('문서와 이미지 '+images.length+'개를 함께 열었습니다.','ok');
             return;
         }
-        if (addedImages) {
-            paintPreview();
-            toast(`이미지 ${addedImages}장을 열었습니다. 본문의 상대경로 이미지가 함께 보입니다.`, 'ok');
-            return;
-        }
-        toast('.md · .markdown · .txt 파일만 열 수 있습니다. 다른 파일을 선택해 주세요.', 'err');
+        if(rememberLocalImages(images)){paintPreview();toast('이미지를 추가했습니다.','ok');return;}
+        toast('MD, ZIP 또는 이미지 파일을 열어 주세요.','err');
     }
 
     /* ---------------------------------------------------------------- diary preview */
@@ -1866,6 +1862,7 @@
     /* ---------------------------------------------------------------- exports */
     function absoluteImageCandidates(value) {
         const raw=String(value||'').trim();
+        if(state.loadedKind==='local'&&!/^(?:https?:|blob:|\/\/)/i.test(raw))return [];
         if (/^https?:\/\//i.test(raw)) return [raw];
         if (/^\/\//.test(raw)) return [location.protocol+raw];
         if (/^blob:/i.test(raw)) return [raw];
@@ -2187,6 +2184,8 @@ ${bodyHtml}
 
     function wireLoad() {
         el.btnOpenLocal.addEventListener('click', () => el.fileInput.click());
+        $('btnOpenLocalFolder').addEventListener('click',()=>$('folderInput').click());
+        $('folderInput').addEventListener('change',event=>{handleFiles(Array.from(event.target.files||[]));event.target.value='';});
         el.fileInput.addEventListener('change', () => {
             const files = el.fileInput.files;
             handleFiles(files);
@@ -2206,6 +2205,50 @@ ${bodyHtml}
             if (!el.postList.options.length || el.postList.disabled) el.btnListPosts.focus();
         });
         wireDropZone();
+    }
+
+    function entryFiles(entry, out) {
+        return new Promise((resolve) => {
+            if (!entry) { resolve(); return; }
+            if (entry.isFile) {
+                entry.file(
+                    (file) => {
+                        out.push({ file, relative: String(entry.fullPath || file.name || '').replace(/^\/+/, '') });
+                        resolve();
+                    },
+                    () => resolve(),
+                );
+                return;
+            }
+            if (!entry.isDirectory) { resolve(); return; }
+            const reader = entry.createReader();
+            const readBatch = () => {
+                /* readEntries hands over at most 100 entries per call, so keep asking */
+                reader.readEntries((entries) => {
+                    if (!entries || !entries.length) { resolve(); return; }
+                    Promise.all(entries.map((child) => entryFiles(child, out))).then(readBatch, readBatch);
+                }, () => resolve());
+            };
+            readBatch();
+        });
+    }
+
+    /* the entries must be taken while the drop event is still being handled */
+    function readDroppedEntries(dataTransfer) {
+        const items = dataTransfer && dataTransfer.items ? Array.from(dataTransfer.items) : [];
+        const handles = items
+            .map((item) => (item && typeof item.webkitGetAsEntry === 'function' ? item.webkitGetAsEntry() : null))
+            .filter(Boolean);
+        if (!handles.length) return Promise.resolve(null);
+        const records = [];
+        const roots = [];
+        return handles.reduce((chain, entry) => chain.then(() => {
+            if (entry.isDirectory) {
+                const root = String(entry.fullPath || '').replace(/^\/+/, '').split('/')[0] || entry.name || '';
+                if (root && !roots.includes(root)) roots.push(root);
+            }
+            return entryFiles(entry, records);
+        }), Promise.resolve()).then(() => ({ records, folderRoot: roots[0] || '' }));
     }
 
     function wireDropZone() {
@@ -2238,7 +2281,8 @@ ${bodyHtml}
             event.preventDefault();
             depth = 0;
             el.dropOverlay.hidden = true;
-            handleFiles(event.dataTransfer.files ? Array.prototype.slice.call(event.dataTransfer.files) : []);
+            const plain=Array.from(event.dataTransfer.files||[]);
+            readDroppedEntries(event.dataTransfer).then(result=>handleFiles(result&&result.records.length?result.records:plain)).catch(()=>handleFiles(plain));
         });
         window.addEventListener('dragend', () => { depth = 0; el.dropOverlay.hidden = true; });
         window.addEventListener('blur', () => { depth = 0; el.dropOverlay.hidden = true; });
